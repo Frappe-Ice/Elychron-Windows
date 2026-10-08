@@ -1,11 +1,30 @@
 # Elychron Windows
 
-面向 Windows 10/11 x64 的 Elychron 桌面版。项目以
-[`v1.4.1-elychron.1`](https://github.com/Elyyyyyyyyxer/Elychron/releases/tag/v1.4.1-elychron.1)
-为基础，优先服务个人日常使用：在完整主窗口中管理课程、日程和待办，同时用轻量桌面挂件
-展示当天安排。
+> [!IMPORTANT]
+> **这是基于 Elychron 的非官方 Windows 修改版，不是 Celechron、Elychron 上游或浙江大学的官方发布。**
+> Windows 版问题请仅在[本仓库 Issues](https://github.com/Frappe-Ice/Elychron-Windows/issues)
+> 反馈，请勿要求上游作者为本修改版提供支持。
 
-> 这是非官方修改版，与 Celechron 官方项目及浙江大学无隶属关系。
+## 项目身份、来源与修改声明
+
+- **原始项目**：[Celechron/Celechron](https://github.com/Celechron/Celechron)，原项目版权归
+  **nosig 及 Celechron 全体贡献者**所有。
+- **直接上游**：[Elyyyyyyyyxer/Elychron](https://github.com/Elyyyyyyyyxer/Elychron)，
+  是由 **Tixer** 维护的 Celechron 非官方修改版；其新增贡献的权利归相应贡献者所有。
+- **本修改版**：[Frappe-Ice/Elychron-Windows](https://github.com/Frappe-Ice/Elychron-Windows)，
+  由 **Frappe-Ice** 维护；本仓库新增贡献的权利归相应贡献者所有。
+- **代码基线**：直接上游标签
+  [`v1.4.1-elychron.1`](https://github.com/Elyyyyyyyyxer/Elychron/releases/tag/v1.4.1-elychron.1)，
+  commit `b330365`。
+- **修改标记**：本仓库于 **2026-10-08** 在上述基线上加入 Windows 主窗口、桌面挂件、
+  开机自启动、快捷方式、浙大与 PTA 登录记忆及任务同步等修改。
+- **许可证**：整个衍生作品继续遵循 **GNU GPL v3**，完整条款见 [LICENSE](LICENSE)。
+
+本仓库及对应 Release 标签提供所发布 Windows 二进制的对应源码。任何名称、校徽、学校服务名称或
+上游项目名称仅用于说明兼容性和来源，不表示原作者、上游项目或浙江大学认可、背书或维护本版本。
+
+Elychron Windows 面向 Windows 10/11 x64，优先服务个人日常使用：在完整主窗口中管理课程、
+日程和待办，同时用轻量桌面挂件展示当天安排。
 
 ## 下载
 
@@ -70,11 +89,18 @@ Windows 设计边界与验收记录见 [`docs/WINDOWS_MVP.md`](docs/WINDOWS_MVP.
 - 学校服务与 PTA 的实时同步取决于网站可用性、校园网络或 VPN 状态。
 - 移动程序目录后，应重新运行一次主程序，并在设置页重新创建快捷方式，使启动项指向新位置。
 
-## 上游与许可证
+## 许可证、再分发与免责声明
 
-本项目保留原项目提交历史，并基于
-[Elyyyyyyyyxer/Elychron](https://github.com/Elyyyyyyyyxer/Elychron) 的
-`v1.4.1-elychron.1` 开发；更上游为
-[Celechron/Celechron](https://github.com/Celechron/Celechron)。感谢所有原作者与贡献者。
+本项目遵循 [GNU General Public License Version 3](LICENSE)。你可以运行、研究、修改和再分发，
+但在传播源码或二进制时，应按 GPLv3 履行相应义务，包括：
 
-项目继续遵循 [GPL-3.0](LICENSE)。分发修改后的二进制时，应同时提供对应源码并保留版权和许可证声明。
+1. 保留现有版权、来源和许可证声明；
+2. 显著标明你修改过作品及相应修改日期；
+3. 继续以 GPLv3 许可所传播的修改作品，不附加限制接收者行使 GPL 权利的额外条款；
+4. 随二进制提供完整的对应源码，或按 GPLv3 允许的方式确保接收者能够取得对应源码；
+5. 在适用时提供安装和运行修改版本所需的信息。
+
+本程序按“现状”提供，不附带任何明示或默示担保，包括但不限于适销性或特定用途适用性担保；
+在适用法律允许的范围内，版权人和贡献者不对使用或无法使用本程序造成的损失承担责任。
+
+以上是项目声明而非法律意见；再分发前请阅读完整 [GPLv3 条款](LICENSE)。
