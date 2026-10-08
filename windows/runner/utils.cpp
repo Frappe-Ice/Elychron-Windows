@@ -60,5 +60,12 @@ std::string Utf8FromUtf16(const wchar_t* utf16_string) {
   if (converted_length == 0) {
     return std::string();
   }
+  // WideCharToMultiByte includes the terminating NUL when the input length is
+  // -1. std::string stores that byte as part of its length, which makes exact
+  // argument comparisons such as `argument == "--desktop-widget"` fail even
+  // though printing the value looks correct.
+  if (!utf8_string.empty() && utf8_string.back() == '\0') {
+    utf8_string.pop_back();
+  }
   return utf8_string;
 }

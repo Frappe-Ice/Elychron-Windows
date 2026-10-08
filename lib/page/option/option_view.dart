@@ -1,16 +1,12 @@
 import 'package:celechron/utils/platform_features.dart';
 import 'package:celechron/worker/fuse.dart';
-import 'package:celechron/design/alarm_theme_picker.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 
 import 'package:url_launcher/url_launcher_string.dart';
 
-import 'package:celechron/utils/utils.dart';
 import 'package:celechron/model/option.dart';
 import 'package:celechron/design/cupertino_async_switch.dart';
-// ===== MOD: 导出/导入实现见 lib/mod/settings_data_actions.dart =====
-import 'package:celechron/mod/settings_data_actions.dart';
 
 import 'course_id_mapping_edit_page.dart';
 import 'credits_page.dart';
@@ -90,7 +86,8 @@ class OptionPage extends StatelessWidget {
                             title: Text(
                                 // username 偶尔会是空的（CAS 登录成功但资料没取回来），
                                 // 直接插值会显示成「已登录: null」，很难看。空就只说已登录。
-                                _optionController.scholar.value.username == null ||
+                                _optionController.scholar.value.username ==
+                                            null ||
                                         _optionController
                                             .scholar.value.username!.isEmpty
                                     ? '已登录'
@@ -201,7 +198,7 @@ class OptionPage extends StatelessWidget {
                         ...modReminderTiles(context, _optionController),
                       } else ...{
                         CupertinoListTile(
-                          title: const Text('点击登录',
+                          title: const Text('登录浙江大学统一身份认证',
                               style:
                                   TextStyle(color: CupertinoColors.activeBlue)),
                           trailing: const BackChervonRow(
@@ -217,23 +214,25 @@ class OptionPage extends StatelessWidget {
                           },
                         ),
                       },
-                       // 构建错误不再浮在日程页顶部；在设置里集中查看和处理。
-                       ValueListenableBuilder<int>(
-                         valueListenable: AppErrorLog.count,
-                         builder: (context, count, _) {
-                           if (count == 0) return const SizedBox.shrink();
-                           return CupertinoListTile(
-                             title: Text('应用错误（$count）'),
-                             subtitle: const Text('查看最近的构建错误与重新获取数据'),
-                             trailing: const BackChervonRow(),
-                             onTap: () => showAppErrorSheet(context),
-                           );
-                         },
-                       ),
+                      // 构建错误不再浮在日程页顶部；在设置里集中查看和处理。
+                      ValueListenableBuilder<int>(
+                        valueListenable: AppErrorLog.count,
+                        builder: (context, count, _) {
+                          if (count == 0) return const SizedBox.shrink();
+                          return CupertinoListTile(
+                            title: Text('应用错误（$count）'),
+                            subtitle: const Text('查看最近的构建错误与重新获取数据'),
+                            trailing: const BackChervonRow(),
+                            onTap: () => showAppErrorSheet(context),
+                          );
+                        },
+                      ),
                     ],
                   ),
                 )),
             // ===== MOD: AI 智能助手 =====
+            modWindowsSection(context,
+                headerStyle: headerFooterTextStyle, margin: _defaultMargin),
             modAiSection(context,
                 headerStyle: headerFooterTextStyle, margin: _defaultMargin),
             // ===== MOD: 数据（导出 / 导入）=====

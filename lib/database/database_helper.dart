@@ -3,7 +3,6 @@ import 'package:hive/hive.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 import 'package:celechron/model/task.dart';
-import 'package:celechron/model/tombstone.dart';
 import 'package:celechron/worker/fuse.dart';
 import 'package:celechron/model/scholar.dart';
 import 'package:celechron/model/period.dart';
@@ -103,11 +102,13 @@ class DatabaseHelper {
   // P1：默认提醒提前量（分钟）。活动与截止用它；提醒型就是那一刻本身。
   final String kReminderLeadMinutes = 'reminderLeadMinutes';
   final String kBrightnessMode = 'brightnessMode';
+
   /// S1：设备身份（首次读取时生成一次，之后固定）
   final String kDeviceId = 'deviceId';
   final String kCourseIdMappingList = 'courseIdMappingList';
   final String kHideHomeGpa = 'hideHomeGpa';
   final String kAsyncRefresh = 'asyncRefresh';
+  final String kWindowsWidgetAutoStart = 'windowsWidgetAutoStart';
 
   Option getOption() {
     return Option(
@@ -119,6 +120,17 @@ class DatabaseHelper {
       hideHomeGpa: getHideHomeGpa().obs,
       asyncRefresh: getAsyncRefresh().obs,
     );
+  }
+
+  bool getWindowsWidgetAutoStart() {
+    final value = optionsBox.get(kWindowsWidgetAutoStart);
+    if (value is bool) return value;
+    optionsBox.put(kWindowsWidgetAutoStart, true);
+    return true;
+  }
+
+  Future<void> setWindowsWidgetAutoStart(bool enabled) async {
+    await optionsBox.put(kWindowsWidgetAutoStart, enabled);
   }
 
   /// 默认提醒提前量（分钟）：活动锚开始时间、截止锚截止时间，各自再提前这么多。
@@ -246,9 +258,7 @@ class DatabaseHelper {
 
   /// 全部专注会话（按开始时间倒序）
   List<FocusSession> getFocusSessions() {
-    final list = focusBox.values
-        .whereType<FocusSession>()
-        .toList()
+    final list = focusBox.values.whereType<FocusSession>().toList()
       ..sort((a, b) => b.startedAt.compareTo(a.startedAt));
     return list;
   }
@@ -395,42 +405,59 @@ class DatabaseHelper {
 
   Future<Scholar> getScholar() async {
     var scholar = scholarBox.get('user', defaultValue: Scholar());
-    await Future.wait([
-      secureStorage
-          .read(key: kUsername, iOptions: secureStorageIOSOptions)
-          .then((value) {
-        if (value != null) scholar.username = value;
-      }),
-      secureStorage
-          .read(key: kPassword, iOptions: secureStorageIOSOptions)
-          .then((value) {
-        if (value != null) scholar.password = value;
-      })
-    ]);
+    // flutter_secure_storage_windows keeps all values in one encrypted data
+    // file. Concurrent access to two keys can race on that shared file and was
+    // observed leaving a half-restored account (password present, username
+    // missing). Keep reads and writes serialized on every platform.
+    final storedUsername = await secureStorage.read(
+      key: kUsername,
+      iOptions: secureStorageIOSOptions,
+    );
+    final storedPassword = await secureStorage.read(
+      key: kPassword,
+      iOptions: secureStorageIOSOptions,
+    );
+    if (storedUsername != null) scholar.username = storedUsername;
+    if (storedPassword != null) scholar.password = storedPassword;
+    // Scholar.fromJson marks a non-empty cache as logged in, but credentials
+    // are deliberately excluded from Hive. If Windows Credential Manager has
+    // no matching values, expose a real logged-out state instead of an
+    // impossible "logged in but every refresh says not logged in" state.
+    final hasRememberedLogin = scholar.username?.isNotEmpty == true &&
+        scholar.password?.isNotEmpty == true;
+    // A fresh/partially migrated Hive profile can have valid credentials in
+    // Windows Credential Manager but no cached Scholar payload yet. Treat the
+    // credentials as a remembered login so main.dart rebuilds all site
+    // sessions on startup instead of showing a logged-out page.
+    scholar.isLogan = hasRememberedLogin;
     scholar.db = this;
     return scholar;
   }
 
   Future<void> setScholar(Scholar scholar) async {
-    await Future.wait([
-      scholarBox.put('user', scholar),
-      secureStorage.write(
-          key: kUsername,
-          value: scholar.username,
-          iOptions: secureStorageIOSOptions),
-      secureStorage.write(
-          key: kPassword,
-          value: scholar.password,
-          iOptions: secureStorageIOSOptions)
-    ]);
+    await scholarBox.put('user', scholar);
+    await secureStorage.write(
+      key: kUsername,
+      value: scholar.username,
+      iOptions: secureStorageIOSOptions,
+    );
+    await secureStorage.write(
+      key: kPassword,
+      value: scholar.password,
+      iOptions: secureStorageIOSOptions,
+    );
   }
 
   Future<void> removeScholar() async {
-    await Future.wait([
-      scholarBox.delete('user'),
-      secureStorage.delete(key: kUsername, iOptions: secureStorageIOSOptions),
-      secureStorage.delete(key: kPassword, iOptions: secureStorageIOSOptions)
-    ]);
+    await scholarBox.delete('user');
+    await secureStorage.delete(
+      key: kUsername,
+      iOptions: secureStorageIOSOptions,
+    );
+    await secureStorage.delete(
+      key: kPassword,
+      iOptions: secureStorageIOSOptions,
+    );
   }
 
   // Original Web Page

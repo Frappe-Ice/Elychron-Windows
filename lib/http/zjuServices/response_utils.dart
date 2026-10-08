@@ -47,6 +47,16 @@ bool isHttpRedirectStatus(int status) {
       status == HttpStatus.permanentRedirect;
 }
 
+bool statusIndicatesAuthenticationFailure(
+  int status, {
+  Set<int> additionalStatuses = const <int>{},
+}) {
+  return status == HttpStatus.unauthorized ||
+      status == HttpStatus.forbidden ||
+      status == 901 ||
+      additionalStatuses.contains(status);
+}
+
 bool locationIndicatesAuthenticationFailure(String? location) {
   if (location == null) return false;
   final normalized = location.toLowerCase();
@@ -118,6 +128,7 @@ void validateResponse({
   bool relogged = false,
   bool retried = false,
   int? durationMs,
+  Set<int> authenticationFailureStatuses = const <int>{},
 }) {
   // 必须先识别认证页/认证跳转，再把响应交给业务 JSON 解析，
   // 否则 HTTP 200 的登录页容易被误报成普通格式错误。
@@ -151,11 +162,14 @@ void validateResponse({
     message: '响应摘要：${responseSummary(body)}',
   );
 
-  if (status == HttpStatus.unauthorized ||
-      status == HttpStatus.forbidden ||
-      status == 901) {
+  if (statusIndicatesAuthenticationFailure(
+    status,
+    additionalStatuses: authenticationFailureStatuses,
+  )) {
     throw LoginExpiredException(
-      status == 901 ? '$context：服务端拒绝了当前会话' : '$context：登录态已失效',
+      status == 901 || authenticationFailureStatuses.contains(status)
+          ? '$context：服务端拒绝了当前会话'
+          : '$context：登录态已失效',
       details: debugDetails,
     );
   }

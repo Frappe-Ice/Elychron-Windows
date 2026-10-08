@@ -147,6 +147,10 @@ class Zdbk {
         requestUri: requestUri,
         relogged: relogged,
         retried: retried,
+        // ZDBK uses 921 for a rejected/expired business session. Treating it
+        // as an ordinary transport failure skips the existing one-shot
+        // relogin path and leaves the academic page in a false error state.
+        authenticationFailureStatuses: const {921},
       );
     } on AuthenticationExpiredException catch (error) {
       throw SessionExpiredException(
@@ -331,8 +335,7 @@ class Zdbk {
         continue;
       }
       try {
-        sessions.add(
-            Session.fromZdbk(item, requestedSeason: requestedSeason));
+        sessions.add(Session.fromZdbk(item, requestedSeason: requestedSeason));
       } on Object catch (error, stackTrace) {
         if (kDebugMode) {
           debugPrint(
@@ -597,8 +600,7 @@ class Zdbk {
             _cachedList('zdbk_Timetable$year$semester', '$context 缓存');
         return Tuple(
           _cacheAwareException(exception, cached, context),
-          _parseSessions(cached.data, '$context 缓存',
-              requestedSeason: semester),
+          _parseSessions(cached.data, '$context 缓存', requestedSeason: semester),
         );
       }
     });

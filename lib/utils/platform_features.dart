@@ -16,4 +16,6 @@ final class PlatformFeatures {
   static bool get isDesktop {
     return Platform.isWindows || Platform.isMacOS || Platform.isLinux;
   }
+
+  static bool get isWindows => Platform.isWindows;
 }

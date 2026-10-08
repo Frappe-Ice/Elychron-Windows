@@ -88,6 +88,41 @@ void main() {
     FlutterSecureStorage.setMockInitialValues({});
   });
 
+  test('统一认证密码加密与网页的短 ASCII 分块格式一致', () {
+    final modulus = List<String>.filled(128, 'f').join();
+    final encrypted = ZjuAm.encryptCasPassword(
+      'test-password',
+      modulus,
+      '1',
+    );
+
+    expect(encrypted, '746573742d70617373776f7264'.padLeft(28, '0'));
+  });
+
+  test('统一认证密码加密保留网页的多分块行为', () {
+    final modulus = List<String>.filled(128, 'f').join();
+    final encrypted = ZjuAm.encryptCasPassword(
+      List<String>.filled(70, 'a').join(),
+      modulus,
+      '1',
+    );
+
+    expect(encrypted.split(' '), hasLength(2));
+  });
+
+  test('统一认证失败页能提取服务端的具体错误', () {
+    const html = '''
+      <p class="errors" id="errormsg">
+        用户名或密码错误&nbsp;<strong>请重试</strong>
+      </p>
+    ''';
+
+    expect(
+      ZjuAm.extractCasLoginError(html),
+      '用户名或密码错误 请重试',
+    );
+  });
+
   test('旧版持久化 SSO Cookie 被忽略并删除，启动使用密码新建会话', () async {
     const username = 'auth-test-ignore-legacy-cache';
     _seedCachedCookie(username, 'stale-persisted-cookie');

@@ -6,6 +6,7 @@ import 'package:celechron/page/option/option_controller.dart';
 import 'package:celechron/services/diagnostic_log_service.dart';
 import 'package:celechron/services/refresh_coordinator.dart';
 import 'package:celechron/mod/login_criteria.dart';
+import 'package:celechron/mod/scholar_todo_sync.dart';
 import 'package:celechron/utils/json_utils.dart';
 import 'package:celechron/model/practice_score_item.dart';
 
@@ -40,7 +41,15 @@ class Scholar {
   String? password;
   Spider? _spider;
 
-  bool get isGrs => !username!.startsWith('3');
+  /// Whether the current account is a graduate-school account.
+  ///
+  /// Older/local-only caches may contain academic data without a persisted
+  /// username. Treat those as undergraduate/unknown instead of crashing the
+  /// entire Windows window during its first frame.
+  bool get isGrs {
+    final account = username;
+    return account != null && account.isNotEmpty && !account.startsWith('3');
+  }
 
   // 按学期整理好的学业信息，包括该学期的所有科目、考试、课表、均绩等
   List<Semester> semesters = <Semester>[];
@@ -158,7 +167,11 @@ class Scholar {
     // 现在身份通过即算登录成功，子站失败降级为「部分模块暂不可用」，见 LoginCriteria。
     if (LoginCriteria.succeeded(loginErrorMessage)) {
       isLogan = true;
-      _db?.setScholar(this);
+      // Credentials live in the OS credential store. Do not report login as
+      // complete until that asynchronous write has finished, otherwise a
+      // quick desktop restart can restore cached academic data without the
+      // credentials needed to rebuild site sessions.
+      await _db?.setScholar(this);
     }
     return loginErrorMessage;
   }
@@ -330,6 +343,10 @@ class Scholar {
               updateLastUpdateTime(value.item2);
             }
             _applyFetchResult(value);
+
+            // 学在浙大新作业直接进入 Elychron 待办。稳定来源 uid
+            // 负责去重，已导入的待办由用户控制，刷新不覆盖。
+            await syncScholarTodosIntoTaskList(todos);
 
             // 终态补发：最后完成的模块不会触发 onProgress，只能在这里定论
             emitStatuses(value.item2);

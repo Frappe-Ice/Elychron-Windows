@@ -12,8 +12,10 @@ import 'package:celechron/page/task/task_view.dart';
 import 'package:celechron/page/calendar/calendar_view.dart';
 import 'package:celechron/page/focus/focus_home_page.dart';
 import 'package:celechron/page/option/option_view.dart';
+import 'package:celechron/page/pta/pta_page.dart';
 // ===== MOD: 分享接收 / 闹钟逻辑集中在 lib/mod/home_mod_hooks.dart =====
 import 'package:celechron/mod/home_mod_hooks.dart';
+import 'package:celechron/utils/platform_features.dart';
 
 import 'package:celechron/worker/fuse.dart';
 
@@ -27,6 +29,15 @@ class HomePage extends StatefulWidget {
 }
 
 class _HomePageState extends State<HomePage> {
+  static const _destinations = <_HomeDestination>[
+    _HomeDestination(CupertinoIcons.calendar, '日程'),
+    _HomeDestination(CupertinoIcons.check_mark, '待办'),
+    _HomeDestination(CupertinoIcons.timer, '专注'),
+    _HomeDestination(Icons.school_rounded, '学业'),
+    _HomeDestination(Icons.code_rounded, 'PTA'),
+    _HomeDestination(CupertinoIcons.settings, '设置'),
+  ];
+
   int _indexNum = 0;
   final PageController _pageController = PageController();
 
@@ -37,6 +48,7 @@ class _HomePageState extends State<HomePage> {
     // ===== MOD: 专注页（待办/学业之间，插在这里不会动到 jumpToPage(1)）=====
     _KeepAlivePage(child: FocusHomePage()),
     _KeepAlivePage(child: ScholarPage()),
+    const _KeepAlivePage(child: PtaPage()),
     _KeepAlivePage(child: OptionPage()),
   ];
 
@@ -70,28 +82,12 @@ class _HomePageState extends State<HomePage> {
       backgroundColor: CupertinoDynamicColor.resolve(
               CupertinoColors.secondarySystemBackground, context)
           .withValues(alpha: 0.5),
-      items: const <BottomNavigationBarItem>[
-        BottomNavigationBarItem(
-          icon: Icon(CupertinoIcons.calendar),
-          label: '日程',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(CupertinoIcons.check_mark),
-          label: '待办',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(CupertinoIcons.timer),
-          label: '专注',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.school_rounded),
-          label: '学业',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(CupertinoIcons.settings),
-          label: '设置',
-        ),
-      ],
+      items: _destinations
+          .map((destination) => BottomNavigationBarItem(
+                icon: Icon(destination.icon),
+                label: destination.label,
+              ))
+          .toList(growable: false),
       currentIndex: _indexNum,
       // 点按瞬时切换（iOS 原生习惯）。jumpToPage 会同步触发 onPageChanged，
       // _indexNum 只在 onPageChanged 里更新，这里不再 setState
@@ -124,6 +120,28 @@ class _HomePageState extends State<HomePage> {
         children: _pages,
       ),
     );
+
+    // 桌面端保留同一套完整页面，但使用适合宽屏和鼠标的侧边导航。
+    // 不在这里复制业务页面，避免 Windows 与移动端的待办能力逐渐分叉。
+    final useDesktopNavigation =
+        PlatformFeatures.isDesktop && MediaQuery.sizeOf(context).width >= 800;
+    if (useDesktopNavigation) {
+      return DecoratedBox(
+        decoration: BoxDecoration(
+          color: CupertinoTheme.of(context).scaffoldBackgroundColor,
+        ),
+        child: Row(
+          children: [
+            _DesktopNavigationSidebar(
+              destinations: _destinations,
+              selectedIndex: _indexNum,
+              onSelected: _pageController.jumpToPage,
+            ),
+            Expanded(child: content),
+          ],
+        ),
+      );
+    }
 
     // 以下复刻 CupertinoTabScaffold（resizeToAvoidBottomInset: true）的布局逻辑：
     // 键盘高度转为内容 Padding 并从子 MediaQuery 移除；本应用标签栏为半透明
@@ -219,6 +237,113 @@ class _HomePageState extends State<HomePage> {
             ],
           );
         });
+  }
+}
+
+class _HomeDestination {
+  const _HomeDestination(this.icon, this.label);
+
+  final IconData icon;
+  final String label;
+}
+
+class _DesktopNavigationSidebar extends StatelessWidget {
+  const _DesktopNavigationSidebar({
+    required this.destinations,
+    required this.selectedIndex,
+    required this.onSelected,
+  });
+
+  final List<_HomeDestination> destinations;
+  final int selectedIndex;
+  final ValueChanged<int> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final primaryColor = CupertinoTheme.of(context).primaryColor;
+    final separator = CupertinoDynamicColor.resolve(
+      CupertinoColors.separator,
+      context,
+    );
+    final sidebarColor = CupertinoDynamicColor.resolve(
+      CupertinoColors.secondarySystemBackground,
+      context,
+    );
+
+    return Container(
+      width: 188,
+      decoration: BoxDecoration(
+        color: sidebarColor,
+        border: Border(right: BorderSide(color: separator, width: 0.5)),
+      ),
+      child: SafeArea(
+        right: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(22, 22, 18, 18),
+              child: Text(
+                'Elychron',
+                style: TextStyle(fontSize: 22, fontWeight: FontWeight.w700),
+              ),
+            ),
+            Expanded(
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                itemCount: destinations.length,
+                itemBuilder: (context, index) {
+                  final destination = destinations[index];
+                  final selected = index == selectedIndex;
+                  return Padding(
+                    padding: const EdgeInsets.only(bottom: 4),
+                    child: CupertinoButton(
+                      padding: EdgeInsets.zero,
+                      onPressed: () => onSelected(index),
+                      child: Container(
+                        height: 44,
+                        padding: const EdgeInsets.symmetric(horizontal: 12),
+                        decoration: BoxDecoration(
+                          color: selected
+                              ? primaryColor.withValues(alpha: 0.14)
+                              : null,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: Row(
+                          children: [
+                            Icon(
+                              destination.icon,
+                              size: 21,
+                              color: selected
+                                  ? primaryColor
+                                  : CupertinoColors.secondaryLabel
+                                      .resolveFrom(context),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              destination.label,
+                              style: TextStyle(
+                                color: selected
+                                    ? primaryColor
+                                    : CupertinoColors.label
+                                        .resolveFrom(context),
+                                fontWeight: selected
+                                    ? FontWeight.w600
+                                    : FontWeight.w400,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 }
 

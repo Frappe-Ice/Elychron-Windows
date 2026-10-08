@@ -255,13 +255,7 @@ class ZjuAm {
 
       late String pwdEnc;
       try {
-        var modInt = BigInt.parse(modulusStr, radix: 16);
-        var expInt = BigInt.parse(exponentStr, radix: 16);
-        var pwdInt = BigInt.parse(
-            utf8.encode(password).map((e) => e.toRadixString(16)).join(),
-            radix: 16);
-        var pwdEncInt = pwdInt.modPow(expInt, modInt);
-        pwdEnc = pwdEncInt.toRadixString(16).padLeft(128, '0');
+        pwdEnc = encryptCasPassword(password, modulusStr, exponentStr);
       } on Object catch (error, stackTrace) {
         if (error is Error) {
           Error.throwWithStackTrace(error, stackTrace);
@@ -308,10 +302,12 @@ class ZjuAm {
         return cookie;
       } else {
         final location = response.headers.value(HttpHeaders.locationHeader);
-        throw LoginException("统一身份认证失败，学号或密码错误，或认证会话已失效"
-            "；HTTP ${response.statusCode}"
-            "${location == null ? '' : '；Location $location'}"
-            "；响应摘要：${responseSummary(body)}");
+        final serverMessage = extractCasLoginError(body);
+        throw LoginException(serverMessage ??
+            "统一身份认证失败，学号或密码错误，或当前会话需要验证码"
+                "；HTTP ${response.statusCode}"
+                "${location == null ? '' : '；Location $location'}"
+                "；响应摘要：${responseSummary(body)}");
       }
     } on Object catch (error, stackTrace) {
       throw exceptionFrom(
@@ -321,5 +317,71 @@ class ZjuAm {
         stackTrace: stackTrace,
       );
     }
+  }
+
+  /// Mirrors the legacy RSA implementation used by ZJU CAS' login.js.
+  ///
+  /// That script reverses the JavaScript UTF-16 code units, packs two units
+  /// into each little-endian 16-bit digit, and may emit multiple blocks.
+  /// Keeping the same algorithm matters for non-ASCII and unusually long
+  /// passwords; a direct UTF-8-to-BigInt conversion only happens to match the
+  /// common short ASCII case.
+  @visibleForTesting
+  static String encryptCasPassword(
+    String password,
+    String modulusHex,
+    String exponentHex,
+  ) {
+    final modulus = BigInt.parse(modulusHex, radix: 16);
+    final exponent = BigInt.parse(exponentHex, radix: 16);
+    final modulusDigits = (modulus.bitLength + 15) ~/ 16;
+    final chunkSize = 2 * (modulusDigits - 1);
+    if (chunkSize <= 0) throw const FormatException('RSA modulus is too short');
+
+    final reversed = password.codeUnits.reversed.toList(growable: true);
+    while (reversed.length % chunkSize != 0) {
+      reversed.add(0);
+    }
+    if (reversed.isEmpty) reversed.addAll(List<int>.filled(chunkSize, 0));
+
+    final blocks = <String>[];
+    for (var offset = 0; offset < reversed.length; offset += chunkSize) {
+      var value = BigInt.zero;
+      var digitIndex = 0;
+      for (var index = offset; index < offset + chunkSize; index += 2) {
+        final digit = reversed[index] + (reversed[index + 1] << 8);
+        value += BigInt.from(digit) << (digitIndex * 16);
+        digitIndex++;
+      }
+      final encrypted = value.modPow(exponent, modulus).toRadixString(16);
+      final jsHexLength = ((encrypted.length + 3) ~/ 4) * 4;
+      blocks.add(encrypted.padLeft(jsHexLength, '0'));
+    }
+    return blocks.join(' ');
+  }
+
+  @visibleForTesting
+  static String? extractCasLoginError(String html) {
+    final match = RegExp(
+      r'''<[^>]*\bid\s*=\s*["']errormsg["'][^>]*>([\s\S]*?)</[^>]+>''',
+      caseSensitive: false,
+    ).firstMatch(html);
+    if (match == null) return null;
+
+    var text = match.group(1) ?? '';
+    text = text.replaceAll(RegExp(r'<[^>]+>'), ' ');
+    text = text
+        .replaceAll('&nbsp;', ' ')
+        .replaceAll('&amp;', '&')
+        .replaceAll('&lt;', '<')
+        .replaceAll('&gt;', '>')
+        .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'");
+    text = text.replaceAllMapped(RegExp(r'&#(\d+);'), (match) {
+      final value = int.tryParse(match.group(1) ?? '');
+      return value == null ? match.group(0)! : String.fromCharCode(value);
+    });
+    text = text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    return text.isEmpty ? null : text;
   }
 }

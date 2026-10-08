@@ -52,6 +52,13 @@ class Win32Window {
   // If true, closing this window will quit the application.
   void SetQuitOnClose(bool quit_on_close);
 
+  // Configures the top-level window as a frameless, non-activating desktop
+  // widget. Must be called before Create().
+  void SetDesktopWidgetMode(bool enabled);
+
+  // Selects the display whose right edge hosts this widget instance.
+  void SetDesktopWidgetMonitor(int monitor_index);
+
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
 
@@ -91,6 +98,8 @@ class Win32Window {
   static void UpdateTheme(HWND const window);
 
   bool quit_on_close_ = false;
+  bool desktop_widget_mode_ = false;
+  int desktop_widget_monitor_index_ = 0;
 
   // window handle for top level window.
   HWND window_handle_ = nullptr;

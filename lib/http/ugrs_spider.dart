@@ -72,6 +72,7 @@ class UgrsSpider implements Spider {
       return const [];
     }
   }
+
   static const _retryableFetchErrors = <String>[
     "无法解析",
     "iplanetdirectorypro无效",
@@ -564,7 +565,9 @@ class UgrsSpider implements Spider {
           // 这三个数字分开记，出问题时才分得清是抓取、解析还是过滤掉的。
           final onTimetable = sessions
               .where((e) =>
-                  e.confirmed && (e.firstHalf || e.secondHalf) && e.showOnTimetable)
+                  e.confirmed &&
+                  (e.firstHalf || e.secondHalf) &&
+                  e.showOnTimetable)
               .length;
           if (!isProbeYear) {
             timetableParsed += sessions.length;
@@ -591,13 +594,29 @@ class UgrsSpider implements Spider {
           }
           if (isProbeYear && value.item1 != null) {
             probeHadUnexpectedFailure = true;
+            // A future academic year is speculative. Its endpoint can return
+            // session/permission errors before that year is published even
+            // while all current semesters refreshed successfully. Preserve
+            // the diagnostic, but never fail the usable timetable aggregate.
+            return null;
           }
-          return Future.value(value.item1?.toString());
+          return value.item1?.toString();
         } on Object catch (error, stackTrace) {
           if (isProbeYear && isExpectedTimetableProbeMiss(error)) {
             return null;
           }
-          if (isProbeYear) probeHadUnexpectedFailure = true;
+          if (isProbeYear) {
+            probeHadUnexpectedFailure = true;
+            DiagnosticLogService.instance.record(
+              level: CelechronLogLevel.warning,
+              module: '课表',
+              operation: 'futureProbe',
+              message: '未来学年课表探测异常，已忽略且不影响当前课表',
+              error: error,
+              stackTrace: stackTrace,
+            );
+            return null;
+          }
           return Future.value(
               _describeRefreshFailure(error, stackTrace, source: '课表'));
         }
@@ -627,7 +646,7 @@ class UgrsSpider implements Spider {
                     '条目数：$probeSessionCount'
                 : probeHadUnexpectedFailure
                     ? '未来学年课表探测失败：$queryAcademicYear，'
-                        '已按现有错误链路上报'
+                        '已忽略，不影响当前课表'
                     : '未来学年课表尚未开放：$queryAcademicYear',
           );
           return value;
@@ -712,8 +731,21 @@ class UgrsSpider implements Spider {
       }
       return null;
     }));
-    fetches.add(Future.wait(timetableFetches)
-        .then((value) => value.firstWhereOrNull((e) => e != null)));
+    fetches.add(Future.wait(timetableFetches).then((value) {
+      final failure = value.firstWhereOrNull((error) => error != null);
+      if (failure == null) return null;
+      // The server routinely returns 901/921 for old empty terms and terms
+      // that have not opened yet. If usable timetable rows were fetched from
+      // other terms, report a partial refresh instead of declaring the whole
+      // timetable (and remembered login) broken.
+      if (timetableOnTable > 0) {
+        return degradedRefreshText(
+          '课表：已实时获取 $timetableOnTable 条，部分历史或未开放学期不可用',
+          details: failure,
+        );
+      }
+      return failure;
+    }));
 
     fetches.add(_fetchWithRetry(() => _zdbk.getExamsDto(_httpClient))
         .then((value) {

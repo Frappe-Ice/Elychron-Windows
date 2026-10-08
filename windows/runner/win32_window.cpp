@@ -3,6 +3,10 @@
 #include <dwmapi.h>
 #include <flutter_windows.h>
 
+#include <algorithm>
+#include <cwchar>
+#include <vector>
+
 #include "resource.h"
 
 namespace {
@@ -15,6 +19,14 @@ namespace {
 #ifndef DWMWA_USE_IMMERSIVE_DARK_MODE
 #define DWMWA_USE_IMMERSIVE_DARK_MODE 20
 #endif
+
+#ifndef DWMWA_WINDOW_CORNER_PREFERENCE
+#define DWMWA_WINDOW_CORNER_PREFERENCE 33
+#endif
+
+enum DesktopWidgetCornerPreference {
+  kDesktopWidgetRoundCorners = 2,
+};
 
 constexpr const wchar_t kWindowClassName[] = L"FLUTTER_RUNNER_WIN32_WINDOW";
 
@@ -31,10 +43,171 @@ static int g_active_window_count = 0;
 
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
+constexpr UINT kSpawnWorkerMessage = 0x052C;
+
+struct DesktopMonitorDescriptor {
+  HMONITOR handle;
+  bool primary;
+};
+
+BOOL CALLBACK CollectDesktopMonitors(HMONITOR monitor,
+                                     HDC,
+                                     LPRECT,
+                                     LPARAM data) {
+  MONITORINFO info{sizeof(MONITORINFO)};
+  if (GetMonitorInfo(monitor, &info)) {
+    reinterpret_cast<std::vector<DesktopMonitorDescriptor>*>(data)->push_back(
+        {monitor, (info.dwFlags & MONITORINFOF_PRIMARY) != 0});
+  }
+  return TRUE;
+}
+
+HMONITOR DesktopMonitorAtIndex(int requested_index) {
+  std::vector<DesktopMonitorDescriptor> monitors;
+  EnumDisplayMonitors(nullptr, nullptr, CollectDesktopMonitors,
+                      reinterpret_cast<LPARAM>(&monitors));
+  if (monitors.empty()) {
+    return MonitorFromPoint(POINT{0, 0}, MONITOR_DEFAULTTOPRIMARY);
+  }
+  std::stable_sort(monitors.begin(), monitors.end(),
+                   [](const auto& left, const auto& right) {
+                     return left.primary && !right.primary;
+                   });
+  const int index =
+      std::clamp(requested_index, 0, static_cast<int>(monitors.size()) - 1);
+  return monitors[index].handle;
+}
+
+enum AccentState {
+  kAccentDisabled = 0,
+  kAccentEnableTransparentGradient = 2,
+};
+
+struct AccentPolicy {
+  int state;
+  int flags;
+  int color;
+  int animation_id;
+};
+
+struct WindowCompositionAttributeData {
+  int attribute;
+  PVOID data;
+  ULONG data_size;
+};
+
+using SetWindowCompositionAttribute =
+    BOOL(WINAPI*)(HWND, WindowCompositionAttributeData*);
+
+void EnableTransparentComposition(HWND window) {
+  HMODULE user32 = LoadLibrary(L"user32.dll");
+  if (user32 == nullptr) return;
+  auto set_window_composition_attribute =
+      reinterpret_cast<SetWindowCompositionAttribute>(
+          GetProcAddress(user32, "SetWindowCompositionAttribute"));
+  if (set_window_composition_attribute != nullptr) {
+    AccentPolicy policy{kAccentEnableTransparentGradient, 2, 0, 0};
+    WindowCompositionAttributeData data{19, &policy, sizeof(policy)};
+    set_window_composition_attribute(window, &data);
+  }
+  FreeLibrary(user32);
+}
+
+BOOL CALLBACK FindWallpaperEngineWindow(HWND window, LPARAM lparam) {
+  wchar_t class_name[128]{};
+  if (GetClassName(window, class_name, 128) == 0) {
+    return TRUE;
+  }
+  // Wallpaper Engine uses WPEDesktopDX11Window today and may select another
+  // rendering backend in the future. Matching the stable prefix covers both.
+  if (wcsncmp(class_name, L"WPEDesktop", 10) != 0) {
+    return TRUE;
+  }
+  HWND host = GetParent(window);
+  if (host != nullptr) {
+    *reinterpret_cast<HWND*>(lparam) = host;
+    return FALSE;
+  }
+  return TRUE;
+}
+
+HWND WallpaperEngineHost() {
+  HWND host = nullptr;
+  EnumChildWindows(GetDesktopWindow(), FindWallpaperEngineWindow,
+                   reinterpret_cast<LPARAM>(&host));
+  return host;
+}
+
+BOOL CALLBACK FindDesktopWorker(HWND top_level, LPARAM lparam) {
+  if (FindWindowEx(top_level, nullptr, L"SHELLDLL_DefView", nullptr) ==
+      nullptr) {
+    return TRUE;
+  }
+  auto worker = FindWindowEx(nullptr, top_level, L"WorkerW", nullptr);
+  // Recent Windows 11 Explorer builds do not always create the traditional
+  // empty WorkerW sibling. In that layout, use the icon host itself instead
+  // of returning null and accidentally placing the widget behind the
+  // wallpaper.
+  *reinterpret_cast<HWND*>(lparam) = worker != nullptr ? worker : top_level;
+  return FALSE;
+}
+
+HWND DesktopWorkerWindow() {
+  // When Wallpaper Engine is active, sharing its WorkerW host and placing the
+  // widget above the wallpaper child keeps the widget visible without turning
+  // it into an always-on-top application window.
+  HWND wallpaper_engine_host = WallpaperEngineHost();
+  if (wallpaper_engine_host != nullptr) {
+    return wallpaper_engine_host;
+  }
+
+  HWND progman = FindWindow(L"Progman", nullptr);
+  if (progman != nullptr) {
+    DWORD_PTR unused = 0;
+    SendMessageTimeout(progman, kSpawnWorkerMessage, 0, 0, SMTO_NORMAL, 1000,
+                       &unused);
+    SendMessageTimeout(progman, kSpawnWorkerMessage, 0xD, 0, SMTO_NORMAL,
+                       1000, &unused);
+    SendMessageTimeout(progman, kSpawnWorkerMessage, 0xD, 1, SMTO_NORMAL,
+                       1000, &unused);
+  }
+  HWND worker = nullptr;
+  EnumWindows(FindDesktopWorker, reinterpret_cast<LPARAM>(&worker));
+  return worker;
+}
+
 // Scale helper to convert logical scaler values to physical using passed in
 // scale factor
 int Scale(int source, double scale_factor) {
   return static_cast<int>(source * scale_factor);
+}
+
+constexpr int kDesktopWidgetLogicalWidth = 280;
+constexpr int kDesktopWidgetLogicalMargin = 12;
+
+RECT DesktopWidgetBounds(HMONITOR monitor, UINT dpi) {
+  MONITORINFO monitor_info{sizeof(MONITORINFO)};
+  if (!GetMonitorInfo(monitor, &monitor_info)) {
+    return RECT{0, 0, kDesktopWidgetLogicalWidth, 360};
+  }
+  const RECT work = monitor_info.rcWork;
+  const double scale_factor = dpi / 96.0;
+  const int margin = Scale(kDesktopWidgetLogicalMargin, scale_factor);
+  const int work_width = std::max(1L, work.right - work.left);
+  const int work_height = std::max(1L, work.bottom - work.top);
+  // Clamp in the target monitor's physical coordinate space. This matters
+  // when a smaller secondary display sits immediately beside a high-DPI main
+  // display: a width calculated in the main display's scale can otherwise
+  // cross the shared edge and cover the neighbouring screen.
+  const int width = std::clamp(
+      Scale(kDesktopWidgetLogicalWidth, scale_factor), 120,
+      std::max(120, work_width - margin * 2));
+  const int height = std::max(240, work_height - margin * 2);
+  const int right = work.right - margin;
+  const int bottom = std::min(work.bottom - margin, work.top + margin + height);
+  const int left = std::max(static_cast<int>(work.left) + margin,
+                            right - width);
+  return RECT{left, work.top + margin, right, bottom};
 }
 
 // Dynamically loads the |EnableNonClientDpiScaling| from the User32 module.
@@ -130,14 +303,29 @@ bool Win32Window::Create(const std::wstring& title,
 
   const POINT target_point = {static_cast<LONG>(origin.x),
                               static_cast<LONG>(origin.y)};
-  HMONITOR monitor = MonitorFromPoint(target_point, MONITOR_DEFAULTTONEAREST);
+  HMONITOR monitor = desktop_widget_mode_
+                         ? DesktopMonitorAtIndex(desktop_widget_monitor_index_)
+                         : MonitorFromPoint(target_point,
+                                            MONITOR_DEFAULTTONEAREST);
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
-      Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
-      Scale(size.width, scale_factor), Scale(size.height, scale_factor),
+  RECT widget_bounds{};
+  if (desktop_widget_mode_) {
+    widget_bounds = DesktopWidgetBounds(monitor, dpi);
+  }
+
+  const DWORD style = desktop_widget_mode_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+  const DWORD extended_style =
+      desktop_widget_mode_ ? WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE : 0;
+  HWND window = CreateWindowEx(
+      extended_style, window_class, title.c_str(), style,
+      desktop_widget_mode_ ? widget_bounds.left : Scale(origin.x, scale_factor),
+      desktop_widget_mode_ ? widget_bounds.top : Scale(origin.y, scale_factor),
+      desktop_widget_mode_ ? widget_bounds.right - widget_bounds.left
+                           : Scale(size.width, scale_factor),
+      desktop_widget_mode_ ? widget_bounds.bottom - widget_bounds.top
+                           : Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
 
   if (!window) {
@@ -146,11 +334,29 @@ bool Win32Window::Create(const std::wstring& title,
 
   UpdateTheme(window);
 
+  if (desktop_widget_mode_) {
+    EnableTransparentComposition(window);
+    const DesktopWidgetCornerPreference corner_preference =
+        kDesktopWidgetRoundCorners;
+    DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
+                          &corner_preference, sizeof(corner_preference));
+    // Keep the transparent Flutter surface as a top-level tool window.
+    // Reparenting the GPU-backed view into Explorer/Wallpaper Engine turns the
+    // complete composition surface invisible on current Windows 11 builds.
+    // This is not topmost: normal application windows naturally cover it,
+    // while it remains above desktop wallpaper renderers.
+    SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
+                 widget_bounds.right - widget_bounds.left,
+                 widget_bounds.bottom - widget_bounds.top,
+                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
+  }
+
   return OnCreate();
 }
 
 bool Win32Window::Show() {
-  return ShowWindow(window_handle_, SW_SHOWNORMAL);
+  return ShowWindow(window_handle_,
+                    desktop_widget_mode_ ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
 }
 
 // static
@@ -188,6 +394,16 @@ Win32Window::MessageHandler(HWND hwnd,
       return 0;
 
     case WM_DPICHANGED: {
+      if (desktop_widget_mode_) {
+        const HMONITOR monitor =
+            DesktopMonitorAtIndex(desktop_widget_monitor_index_);
+        const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+        const RECT bounds = DesktopWidgetBounds(monitor, dpi);
+        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
+                     bounds.right - bounds.left, bounds.bottom - bounds.top,
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        return 0;
+      }
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;
       LONG newHeight = newRectSize->bottom - newRectSize->top;
@@ -196,6 +412,19 @@ Win32Window::MessageHandler(HWND hwnd,
                    newHeight, SWP_NOZORDER | SWP_NOACTIVATE);
 
       return 0;
+    }
+    case WM_DISPLAYCHANGE: {
+      if (desktop_widget_mode_) {
+        const HMONITOR monitor =
+            DesktopMonitorAtIndex(desktop_widget_monitor_index_);
+        const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
+        const RECT bounds = DesktopWidgetBounds(monitor, dpi);
+        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
+                     bounds.right - bounds.left, bounds.bottom - bounds.top,
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        return 0;
+      }
+      break;
     }
     case WM_SIZE: {
       RECT rect = GetClientArea();
@@ -261,6 +490,14 @@ HWND Win32Window::GetHandle() {
 
 void Win32Window::SetQuitOnClose(bool quit_on_close) {
   quit_on_close_ = quit_on_close;
+}
+
+void Win32Window::SetDesktopWidgetMode(bool enabled) {
+  desktop_widget_mode_ = enabled;
+}
+
+void Win32Window::SetDesktopWidgetMonitor(int monitor_index) {
+  desktop_widget_monitor_index_ = std::max(0, monitor_index);
 }
 
 bool Win32Window::OnCreate() {

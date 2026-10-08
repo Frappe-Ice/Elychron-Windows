@@ -208,6 +208,8 @@ Exception exceptionFrom(
     userMessage = '$prefix请求状态异常';
   } else if (error is FormatException) {
     userMessage = '$prefix返回数据格式异常';
+  } else if (error is LoginException) {
+    userMessage = '$prefix${error.toString()}';
   } else if (error is ExceptionWithMessage) {
     userMessage = '$prefix${shortErrorText(error)}';
   } else {

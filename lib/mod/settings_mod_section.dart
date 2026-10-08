@@ -1,6 +1,10 @@
+import 'dart:async';
+
 import 'package:celechron/design/alarm_reliability.dart';
 import 'package:celechron/design/alarm_theme_picker.dart';
 import 'package:celechron/database/database_helper.dart';
+import 'package:celechron/desktop/desktop_widget_service.dart';
+import 'package:celechron/desktop/windows_startup_service.dart';
 import 'package:celechron/mod/ai/ai_settings_page.dart';
 import 'package:celechron/mod/ai/deepseek.dart';
 import 'package:celechron/mod/lan_sync_page.dart';
@@ -8,8 +12,12 @@ import 'package:celechron/mod/settings_data_actions.dart';
 import 'package:celechron/page/focus/focus_stats_page.dart';
 import 'package:celechron/page/option/option_controller.dart';
 import 'package:celechron/page/option/option_view.dart' show BackChervonRow;
+import 'package:celechron/model/scholar.dart';
+import 'package:celechron/model/task.dart';
+import 'package:celechron/services/pta_sync_service.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:get/get.dart';
+import 'package:celechron/utils/platform_features.dart';
 
 /// ============ 设置页里属于魔改的两个区块 ============
 ///
@@ -21,6 +29,259 @@ import 'package:get/get.dart';
 /// **公开发布这版先关掉**：功能尚未完工（用户决定）。代码、网页面板与测试都保留，
 /// 把这里改回 `true` 就能恢复入口，不需要改别的地方。
 const bool kLanSyncEnabled = false;
+
+/// Windows 专属能力：从主程序导出只读快照，由独立桌面挂件展示。
+Widget modWindowsSection(
+  BuildContext context, {
+  required TextStyle? headerStyle,
+  required EdgeInsetsGeometry margin,
+}) {
+  if (!PlatformFeatures.isWindows) {
+    return const SliverToBoxAdapter(child: SizedBox.shrink());
+  }
+  return SliverToBoxAdapter(
+    child: CupertinoListSection.insetGrouped(
+      additionalDividerMargin: 2,
+      margin: margin,
+      header: Container(
+        padding: const EdgeInsets.only(left: 16),
+        child: Text('Windows', style: headerStyle),
+      ),
+      children: const [
+        _WindowsSyncStatusTile(),
+        _WindowsAutoStartTile(),
+        _WindowsShortcutTile(),
+        CupertinoListTile(
+          title: Text('桌面日程挂件'),
+          subtitle: Text('在桌面展示今日课程、日程和待办'),
+          trailing: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CupertinoButton(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                onPressed: DesktopWidgetService.hideWidget,
+                child: Text('关闭'),
+              ),
+              CupertinoButton(
+                padding: EdgeInsets.symmetric(horizontal: 8),
+                onPressed: DesktopWidgetService.showWidget,
+                child: Text('打开'),
+              ),
+            ],
+          ),
+          onTap: DesktopWidgetService.showWidget,
+        ),
+      ],
+    ),
+  );
+}
+
+class _WindowsAutoStartTile extends StatefulWidget {
+  const _WindowsAutoStartTile();
+
+  @override
+  State<_WindowsAutoStartTile> createState() => _WindowsAutoStartTileState();
+}
+
+class _WindowsAutoStartTileState extends State<_WindowsAutoStartTile> {
+  late bool _enabled;
+  bool _busy = false;
+
+  DatabaseHelper get _db => Get.find<DatabaseHelper>(tag: 'db');
+
+  @override
+  void initState() {
+    super.initState();
+    _enabled = _db.getWindowsWidgetAutoStart();
+  }
+
+  Future<void> _setEnabled(bool enabled) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await WindowsStartupService.applyWidgetAutoStart(enabled);
+      await _db.setWindowsWidgetAutoStart(enabled);
+      if (mounted) setState(() => _enabled = enabled);
+    } on Object catch (error) {
+      if (!mounted) return;
+      await showCupertinoDialog<void>(
+        context: context,
+        builder: (context) => CupertinoAlertDialog(
+          title: const Text('设置失败'),
+          content: Text(error.toString()),
+          actions: [
+            CupertinoDialogAction(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('知道了'),
+            ),
+          ],
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoListTile(
+      title: const Text('挂件开机自启动'),
+      subtitle: const Text('登录 Windows 后自动显示挂件，不弹出主窗口'),
+      trailing: CupertinoSwitch(
+        value: _enabled,
+        onChanged: _busy ? null : _setEnabled,
+      ),
+      onTap: _busy ? null : () => _setEnabled(!_enabled),
+    );
+  }
+}
+
+class _WindowsShortcutTile extends StatelessWidget {
+  const _WindowsShortcutTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoListTile(
+      title: const Text('创建桌面快捷方式'),
+      subtitle: const Text('为当前程序位置创建 Elychron 快捷方式'),
+      trailing: const BackChervonRow(),
+      onTap: () async {
+        try {
+          final path = await WindowsStartupService.createDesktopShortcut();
+          if (!context.mounted) return;
+          await showCupertinoDialog<void>(
+            context: context,
+            builder: (context) => CupertinoAlertDialog(
+              title: const Text('已创建快捷方式'),
+              content: Text(path),
+              actions: [
+                CupertinoDialogAction(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('完成'),
+                ),
+              ],
+            ),
+          );
+        } on Object catch (error) {
+          if (!context.mounted) return;
+          await showCupertinoDialog<void>(
+            context: context,
+            builder: (context) => CupertinoAlertDialog(
+              title: const Text('创建失败'),
+              content: Text(error.toString()),
+              actions: [
+                CupertinoDialogAction(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('知道了'),
+                ),
+              ],
+            ),
+          );
+        }
+      },
+    );
+  }
+}
+
+class _WindowsSyncStatusTile extends StatelessWidget {
+  const _WindowsSyncStatusTile();
+
+  @override
+  Widget build(BuildContext context) {
+    final pta = PtaSyncService.instance;
+    return AnimatedBuilder(
+      animation: pta,
+      builder: (context, _) => Obx(() {
+        final scholar = Get.find<Rx<Scholar>>(tag: 'scholar').value;
+        final tasks = Get.find<RxList<Task>>(tag: 'taskList');
+        final courseTaskCount =
+            tasks.where((task) => task.uid.startsWith('courses:')).length;
+        final ptaTaskCount =
+            tasks.where((task) => task.uid.startsWith('pta:')).length;
+        final loginLabel = scholar.isLogan ? '浙大已登录' : '浙大未登录';
+        return CupertinoListTile(
+          title: const Text('自动同步状态'),
+          subtitle: Text(
+            '$loginLabel · 学在浙大 $courseTaskCount 条 · PTA $ptaTaskCount 条',
+          ),
+          trailing: const BackChervonRow(),
+          onTap: () => _showWindowsSyncDetails(
+            context,
+            scholar: scholar,
+            courseTaskCount: courseTaskCount,
+            ptaTaskCount: ptaTaskCount,
+          ),
+        );
+      }),
+    );
+  }
+}
+
+Future<void> _showWindowsSyncDetails(
+  BuildContext context, {
+  required Scholar scholar,
+  required int courseTaskCount,
+  required int ptaTaskCount,
+}) async {
+  final pta = PtaSyncService.instance;
+  final latestAcademicUpdate = <DateTime>[
+    scholar.lastUpdateTimeGrade,
+    scholar.lastUpdateTimeCourse,
+    scholar.lastUpdateTimeHomework,
+  ].reduce((left, right) => left.isAfter(right) ? left : right);
+  final academicStatus = scholar.isLogan
+      ? '已登录；最近更新 ${_shortLocalTime(latestAcademicUpdate)}'
+      : '未登录；请在“学业”页或设置顶部登录';
+  await showCupertinoDialog<void>(
+    context: context,
+    builder: (dialogContext) => CupertinoAlertDialog(
+      title: const Text('Windows 自动同步'),
+      content: Text(
+        '浙大教务：$academicStatus\n'
+        '负责校历、课表、考试、成绩、主修与实践。\n\n'
+        '学在浙大：已导入 $courseTaskCount 条作业代办；所有新作业都会进入待办。\n\n'
+        'PTA：已导入 $ptaTaskCount 条真实题集；${pta.status}。\n'
+        'Cookie 只保存在本机，不保存 PTA 密码。\n\n'
+        '主程序运行时每 15 分钟自动刷新；挂件快照每 15 秒更新。',
+        textAlign: TextAlign.left,
+      ),
+      actions: [
+        CupertinoDialogAction(
+          onPressed: () => Navigator.of(dialogContext).pop(),
+          child: const Text('关闭'),
+        ),
+        CupertinoDialogAction(
+          isDefaultAction: true,
+          onPressed: () {
+            Navigator.of(dialogContext).pop();
+            unawaited(_syncAllWindowsSources());
+          },
+          child: const Text('立即同步全部'),
+        ),
+      ],
+    ),
+  );
+}
+
+Future<void> _syncAllWindowsSources() async {
+  if (Get.isRegistered<Rx<Scholar>>(tag: 'scholar')) {
+    final scholar = Get.find<Rx<Scholar>>(tag: 'scholar');
+    if (scholar.value.username?.isNotEmpty == true &&
+        scholar.value.password?.isNotEmpty == true) {
+      await scholar.value.refresh(onPartialUpdate: scholar.refresh);
+      scholar.refresh();
+    }
+  }
+  await PtaSyncService.instance.syncNow();
+  await DesktopWidgetService.publishNow();
+}
+
+String _shortLocalTime(DateTime value) {
+  if (value.year <= 2001) return '尚未成功';
+  String two(int number) => number.toString().padLeft(2, '0');
+  return '${two(value.month)}-${two(value.day)} '
+      '${two(value.hour)}:${two(value.minute)}';
+}
 
 /// 待办提醒方式 / 默认提前量 / 闹钟配色
 List<Widget> modReminderTiles(
@@ -233,9 +494,8 @@ class _FocusParamTileState extends State<_FocusParamTile> {
       context: context,
       builder: (BuildContext context) => CupertinoActionSheet(
         title: Text(isWork ? '一段专注多久' : '每轮休息多久'),
-        message: Text(isWork
-            ? '默认 60 分钟。到点会自动进入休息。'
-            : '默认 15 分钟。想连着干可以把休息设成「不休息」。'),
+        message:
+            Text(isWork ? '默认 60 分钟。到点会自动进入休息。' : '默认 15 分钟。想连着干可以把休息设成「不休息」。'),
         actions: options
             .map((minutes) => CupertinoActionSheetAction(
                   onPressed: () {

@@ -22,6 +22,9 @@
 .vscode/
 
 # Flutter/Dart/Pub related
+.tooling/
+.debug/
+pubspec_overrides.yaml
 **/doc/api/
 .dart_tool/
 .flutter-plugins

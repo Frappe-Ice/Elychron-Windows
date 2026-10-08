@@ -25,6 +25,7 @@ import 'grade_detail/grade_detail_view.dart';
 import 'practice_score/practice_score_page.dart';
 import 'scholar_controller.dart';
 import 'package:celechron/page/option/option_controller.dart';
+import 'package:celechron/page/option/login_page.dart';
 
 Future<void> showRefreshResultDialog(
     BuildContext context, List<String?> results) async {
@@ -149,44 +150,6 @@ class AppErrorLog {
   }
 }
 
-/// 出错位置留下的**一小条**提示（高度固定很矮，不会盖住内容）。
-///
-/// 点它看详情（含「重新获取数据」的动作，原来那个大卡片上的按钮挪到这里）。
-class _AppErrorChip extends StatelessWidget {
-  const _AppErrorChip();
-
-  @override
-  Widget build(BuildContext context) {
-    final labelColor = CupertinoDynamicColor.resolve(
-        CupertinoColors.secondaryLabel, context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2, horizontal: 8),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: () => showAppErrorSheet(context),
-        child: Container(
-          height: 22,
-          padding: const EdgeInsets.symmetric(horizontal: 8),
-          decoration: BoxDecoration(
-            color: CupertinoColors.systemRed.withValues(alpha: 0.10),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(CupertinoIcons.exclamationmark_triangle_fill,
-                  size: 11, color: CupertinoColors.systemRed),
-              const SizedBox(width: 4),
-              Text('界面这里出了点问题，点开查看',
-                  style: TextStyle(fontSize: 11, color: labelColor)),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 /// 错误详情面板：列出攒下来的错误 + 「重新获取数据」+「清空」
 Future<void> showAppErrorSheet(BuildContext context) {
   return showCupertinoModalPopup<void>(
@@ -210,8 +173,7 @@ Future<void> showAppErrorSheet(BuildContext context) {
               if (!Get.isRegistered<ScholarController>()) return;
               final controller = Get.find<ScholarController>();
               final results = await controller.fetchData();
-              if (context.mounted &&
-                  results.any((result) => result != null)) {
+              if (context.mounted && results.any((result) => result != null)) {
                 await showRefreshResultDialog(context, results);
               }
             } catch (_) {}
@@ -1173,9 +1135,32 @@ class ScholarPage extends StatelessWidget {
                         Text(
                             _scholarController.scholar.isLogan
                                 ? '下拉刷新以获取数据'
-                                : '未登录',
+                                : '尚未登录浙江大学统一身份认证',
                             style:
                                 CupertinoTheme.of(context).textTheme.textStyle),
+                        if (!_scholarController.scholar.isLogan) ...[
+                          const SizedBox(height: 8),
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 24),
+                            child: Text(
+                              '登录后可同步课表、成绩、考试和学在浙大作业。',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: CupertinoDynamicColor.resolve(
+                                    CupertinoColors.secondaryLabel, context),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          CupertinoButton.filled(
+                            onPressed: () => showCupertinoModalPopup<void>(
+                              context: context,
+                              builder: (context) => LoginForm(),
+                            ),
+                            child: const Text('登录浙大教务'),
+                          ),
+                        ],
                         if (_scholarController.scholar.isLogan)
                           Padding(
                             padding: const EdgeInsets.only(top: 8),
