@@ -367,10 +367,15 @@ bool Win32Window::Create(const std::wstring& title,
     widget_bounds = DesktopWidgetBounds(monitor, dpi);
   }
 
-  const DWORD style = desktop_widget_mode_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
+  // WS_DISABLED is intentional for the display-only widget: disabled
+  // top-level windows are skipped by Windows hit testing even when the window
+  // belongs to a different process than Explorer. HTTRANSPARENT alone only
+  // reliably walks sibling windows owned by the same thread.
+  const DWORD style =
+      desktop_widget_mode_ ? WS_POPUP | WS_DISABLED : WS_OVERLAPPEDWINDOW;
   const DWORD extended_style = desktop_widget_mode_
                                    ? WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
-                                         WS_EX_TRANSPARENT
+                                         WS_EX_TRANSPARENT | WS_EX_LAYERED
                                    : 0;
   HWND window = CreateWindowEx(
       extended_style, window_class, title.c_str(), style,
@@ -389,6 +394,10 @@ bool Win32Window::Create(const std::wstring& title,
   UpdateTheme(window);
 
   if (desktop_widget_mode_) {
+    // WS_EX_TRANSPARENT only guarantees cross-process click-through for a
+    // layered window. Keep the layer fully opaque at the native level;
+    // Flutter's own alpha channel still supplies the visible transparency.
+    SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
     EnableTransparentComposition(window);
     const DesktopWidgetCornerPreference corner_preference =
         kDesktopWidgetRoundCorners;
@@ -619,12 +628,25 @@ Win32Window* Win32Window::GetThisFromHandle(HWND const window) noexcept {
 void Win32Window::SetChildContent(HWND content) {
   child_content_ = content;
   SetParent(content, window_handle_);
+  if (desktop_widget_mode_) {
+    const LONG_PTR child_extended_style =
+        GetWindowLongPtr(content, GWL_EXSTYLE);
+    SetWindowLongPtr(content, GWL_EXSTYLE,
+                     child_extended_style | WS_EX_TRANSPARENT |
+                         WS_EX_NOACTIVATE);
+    // Flutter renders into a child HWND. Disable both that surface and its
+    // top-level host so neither can become the mouse target above Explorer.
+    EnableWindow(content, FALSE);
+    EnableWindow(window_handle_, FALSE);
+  }
   RECT frame = GetClientArea();
 
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
 
-  SetFocus(child_content_);
+  if (!desktop_widget_mode_) {
+    SetFocus(child_content_);
+  }
 }
 
 RECT Win32Window::GetClientArea() {
