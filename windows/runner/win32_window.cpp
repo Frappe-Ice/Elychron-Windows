@@ -45,6 +45,7 @@ static int g_active_window_count = 0;
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
+constexpr UINT_PTR kDesktopWidgetVisibilityTimerId = 3;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayOpenCommand = 41001;
 constexpr UINT kTrayToggleWidgetCommand = 41002;
@@ -358,6 +359,7 @@ bool Win32Window::Create(const std::wstring& title,
                  widget_bounds.right - widget_bounds.left,
                  widget_bounds.bottom - widget_bounds.top,
                  SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    SetTimer(window, kDesktopWidgetVisibilityTimerId, 500, nullptr);
   }
 
   const bool created = OnCreate();
@@ -408,6 +410,23 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_WINDOWPOSCHANGING:
+      if (!desktop_widget_mode_ && start_hidden_) {
+        auto position = reinterpret_cast<WINDOWPOS*>(lparam);
+        position->flags &= ~SWP_SHOWWINDOW;
+        position->flags |= SWP_HIDEWINDOW | SWP_NOACTIVATE;
+      }
+      break;
+
+    case WM_TIMER:
+      if (desktop_widget_mode_ &&
+          wparam == kDesktopWidgetVisibilityTimerId &&
+          (!IsWindowVisible(hwnd) || IsIconic(hwnd))) {
+        ShowWindow(hwnd, SW_SHOWNOACTIVATE);
+        return 0;
+      }
+      break;
+
     case WM_NCHITTEST:
       if (desktop_widget_mode_) {
         // The widget is display-only. Its transparent surface spans most of
@@ -420,6 +439,7 @@ Win32Window::MessageHandler(HWND hwnd,
     case WM_CLOSE:
       if (!desktop_widget_mode_ && !exit_requested_ &&
           ReadElychronBoolean(L"CloseToTray", true)) {
+        start_hidden_ = true;
         ShowWindow(hwnd, SW_HIDE);
         return 0;
       }
@@ -482,6 +502,9 @@ Win32Window::MessageHandler(HWND hwnd,
       break;
 
     case WM_DESTROY:
+      if (desktop_widget_mode_) {
+        KillTimer(hwnd, kDesktopWidgetVisibilityTimerId);
+      }
       if (tray_icon_added_) {
         NOTIFYICONDATA icon{};
         icon.cbSize = sizeof(icon);
@@ -579,7 +602,8 @@ void Win32Window::SetChildContent(HWND content) {
         GetWindowLongPtr(content, GWL_EXSTYLE);
     SetWindowLongPtr(content, GWL_EXSTYLE,
                      child_extended_style | WS_EX_TRANSPARENT |
-                         WS_EX_NOACTIVATE);
+                         WS_EX_NOACTIVATE | WS_EX_LAYERED);
+    SetLayeredWindowAttributes(content, 0, 255, LWA_ALPHA);
     // Flutter renders into a child HWND. Disable both that surface and its
     // top-level host so neither can become the mouse target above Explorer.
     EnableWindow(content, FALSE);
