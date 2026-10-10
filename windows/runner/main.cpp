@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <string>
 #include <vector>
 
@@ -41,6 +42,19 @@ bool ShouldShowWidgetAtStartup() {
     return true;
   }
   return value != 0;
+}
+
+BOOL CALLBACK HideDesktopWidgetWindow(HWND window, LPARAM) {
+  wchar_t title[128]{};
+  if (GetWindowText(window, title, 128) > 0 &&
+      wcscmp(title, L"Elychron Desktop Widget") == 0) {
+    ShowWindow(window, SW_HIDE);
+  }
+  return TRUE;
+}
+
+void HideDesktopWidgetWindows() {
+  EnumWindows(HideDesktopWidgetWindow, 0);
 }
 
 void LaunchDesktopWidgetRoot() {
@@ -116,6 +130,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       std::find(command_line_arguments.begin(), command_line_arguments.end(),
                 "--close-desktop-widget") != command_line_arguments.end();
   if (close_desktop_widget) {
+    // Hide first in the requesting process. The widget's Flutter teardown can
+    // be slow, but an already hidden HWND no longer covers desktop input.
+    HideDesktopWidgetWindows();
     HANDLE stop_event = OpenEvent(EVENT_MODIFY_STATE, FALSE,
                                   L"Local\\ElychronDesktopWidgetStop");
     if (stop_event != nullptr) {
@@ -200,7 +217,15 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     if (desktop_widget && widget_stop_event != nullptr) {
       const DWORD wait_result = MsgWaitForMultipleObjects(
           1, &widget_stop_event, FALSE, INFINITE, QS_ALLINPUT);
-      if (wait_result == WAIT_OBJECT_0) break;
+      if (wait_result == WAIT_OBJECT_0) {
+        // Flutter engine teardown can take several seconds. Remove the widget
+        // from the desktop immediately so its transparent surface cannot
+        // intercept input while the process finishes cleaning up.
+        if (HWND widget_window = window.GetHandle(); widget_window != nullptr) {
+          ShowWindow(widget_window, SW_HIDE);
+        }
+        break;
+      }
       while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE)) {
         if (msg.message == WM_QUIT) {
           running = false;

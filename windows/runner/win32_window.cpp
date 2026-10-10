@@ -88,7 +88,19 @@ void StartDesktopWidgets() {
   }
 }
 
+BOOL CALLBACK HideDesktopWidgetWindow(HWND window, LPARAM) {
+  wchar_t title[128]{};
+  if (GetWindowText(window, title, 128) > 0 &&
+      wcscmp(title, L"Elychron Desktop Widget") == 0) {
+    ShowWindow(window, SW_HIDE);
+  }
+  return TRUE;
+}
+
 void StopDesktopWidgets() {
+  // Remove every monitor's widget from hit testing immediately. The shared
+  // event then lets each Flutter process clean up at its own pace off-screen.
+  EnumWindows(HideDesktopWidgetWindow, 0);
   HANDLE stop_event =
       OpenEvent(EVENT_MODIFY_STATE, FALSE, L"Local\\ElychronDesktopWidgetStop");
   if (stop_event == nullptr) return;
