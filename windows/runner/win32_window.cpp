@@ -368,8 +368,10 @@ bool Win32Window::Create(const std::wstring& title,
   }
 
   const DWORD style = desktop_widget_mode_ ? WS_POPUP : WS_OVERLAPPEDWINDOW;
-  const DWORD extended_style =
-      desktop_widget_mode_ ? WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE : 0;
+  const DWORD extended_style = desktop_widget_mode_
+                                   ? WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE |
+                                         WS_EX_TRANSPARENT
+                                   : 0;
   HWND window = CreateWindowEx(
       extended_style, window_class, title.c_str(), style,
       desktop_widget_mode_ ? widget_bounds.left : Scale(origin.x, scale_factor),
@@ -451,6 +453,15 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_NCHITTEST:
+      if (desktop_widget_mode_) {
+        // The widget is display-only. Its transparent surface spans most of
+        // the monitor height, so it must never consume desktop or Wallpaper
+        // Engine mouse input.
+        return HTTRANSPARENT;
+      }
+      break;
+
     case WM_CLOSE:
       if (!desktop_widget_mode_ && !exit_requested_ &&
           ReadElychronBoolean(L"CloseToTray", true)) {

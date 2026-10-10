@@ -32,6 +32,31 @@ int MonitorCount() {
   return std::max(1, static_cast<int>(monitors.size()));
 }
 
+bool ShouldShowWidgetAtStartup() {
+  constexpr wchar_t key_path[] = L"Software\\Elychron\\Windows";
+  DWORD value = 1;
+  DWORD size = sizeof(value);
+  if (RegGetValue(HKEY_CURRENT_USER, key_path, L"WidgetVisible",
+                  RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
+    return true;
+  }
+  return value != 0;
+}
+
+void LaunchDesktopWidgetRoot() {
+  wchar_t executable[MAX_PATH]{};
+  if (GetModuleFileName(nullptr, executable, MAX_PATH) == 0) return;
+  std::wstring command =
+      L"\"" + std::wstring(executable) + L"\" --desktop-widget";
+  STARTUPINFO startup_info{sizeof(STARTUPINFO)};
+  PROCESS_INFORMATION process_info{};
+  if (CreateProcess(nullptr, command.data(), nullptr, nullptr, FALSE, 0,
+                    nullptr, nullptr, &startup_info, &process_info)) {
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+  }
+}
+
 int WidgetMonitorIndex(const std::vector<std::string>& arguments) {
   constexpr char prefix[] = "--desktop-widget-monitor=";
   for (const auto& argument : arguments) {
@@ -140,6 +165,13 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
       if (main_mutex != nullptr) CloseHandle(main_mutex);
       ::CoUninitialize();
       return EXIT_SUCCESS;
+    }
+    // Do not wait for Flutter, Hive, secure storage or web sessions before
+    // restoring the user's desktop widget choice at Windows logon. Dart will
+    // publish a fresh snapshot later and its duplicate launch is rejected by
+    // the per-monitor widget mutex.
+    if (background && ShouldShowWidgetAtStartup()) {
+      LaunchDesktopWidgetRoot();
     }
   }
 
