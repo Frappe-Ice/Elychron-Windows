@@ -165,54 +165,16 @@ void EnableTransparentComposition(HWND window) {
   FreeLibrary(user32);
 }
 
-BOOL CALLBACK FindWallpaperEngineWindow(HWND window, LPARAM lparam) {
-  wchar_t class_name[128]{};
-  if (GetClassName(window, class_name, 128) == 0) {
-    return TRUE;
-  }
-  // Wallpaper Engine uses WPEDesktopDX11Window today and may select another
-  // rendering backend in the future. Matching the stable prefix covers both.
-  if (wcsncmp(class_name, L"WPEDesktop", 10) != 0) {
-    return TRUE;
-  }
-  HWND host = GetParent(window);
-  if (host != nullptr) {
-    *reinterpret_cast<HWND*>(lparam) = host;
+BOOL CALLBACK FindDesktopIconHost(HWND top_level, LPARAM lparam) {
+  if (FindWindowEx(top_level, nullptr, L"SHELLDLL_DefView", nullptr) !=
+      nullptr) {
+    *reinterpret_cast<HWND*>(lparam) = top_level;
     return FALSE;
   }
   return TRUE;
 }
 
-HWND WallpaperEngineHost() {
-  HWND host = nullptr;
-  EnumChildWindows(GetDesktopWindow(), FindWallpaperEngineWindow,
-                   reinterpret_cast<LPARAM>(&host));
-  return host;
-}
-
-BOOL CALLBACK FindDesktopWorker(HWND top_level, LPARAM lparam) {
-  if (FindWindowEx(top_level, nullptr, L"SHELLDLL_DefView", nullptr) ==
-      nullptr) {
-    return TRUE;
-  }
-  auto worker = FindWindowEx(nullptr, top_level, L"WorkerW", nullptr);
-  // Recent Windows 11 Explorer builds do not always create the traditional
-  // empty WorkerW sibling. In that layout, use the icon host itself instead
-  // of returning null and accidentally placing the widget behind the
-  // wallpaper.
-  *reinterpret_cast<HWND*>(lparam) = worker != nullptr ? worker : top_level;
-  return FALSE;
-}
-
-HWND DesktopWorkerWindow() {
-  // When Wallpaper Engine is active, sharing its WorkerW host and placing the
-  // widget above the wallpaper child keeps the widget visible without turning
-  // it into an always-on-top application window.
-  HWND wallpaper_engine_host = WallpaperEngineHost();
-  if (wallpaper_engine_host != nullptr) {
-    return wallpaper_engine_host;
-  }
-
+HWND DesktopIconHost() {
   HWND progman = FindWindow(L"Progman", nullptr);
   if (progman != nullptr) {
     DWORD_PTR unused = 0;
@@ -223,9 +185,46 @@ HWND DesktopWorkerWindow() {
     SendMessageTimeout(progman, kSpawnWorkerMessage, 0xD, 1, SMTO_NORMAL,
                        1000, &unused);
   }
-  HWND worker = nullptr;
-  EnumWindows(FindDesktopWorker, reinterpret_cast<LPARAM>(&worker));
-  return worker;
+  if (progman != nullptr &&
+      FindWindowEx(progman, nullptr, L"SHELLDLL_DefView", nullptr) !=
+          nullptr) {
+    return progman;
+  }
+  HWND icon_host = nullptr;
+  EnumWindows(FindDesktopIconHost, reinterpret_cast<LPARAM>(&icon_host));
+  return icon_host != nullptr ? icon_host : progman;
+}
+
+void PositionDesktopWidget(HWND window, const RECT& screen_bounds) {
+  HWND host = GetParent(window);
+  POINT origin{screen_bounds.left, screen_bounds.top};
+  HWND insert_after = HWND_TOP;
+  if (host != nullptr) {
+    ScreenToClient(host, &origin);
+    HWND icon_view =
+        FindWindowEx(host, nullptr, L"SHELLDLL_DefView", nullptr);
+    if (icon_view != nullptr) insert_after = icon_view;
+  }
+  SetWindowPos(window, insert_after, origin.x, origin.y,
+               screen_bounds.right - screen_bounds.left,
+               screen_bounds.bottom - screen_bounds.top,
+               SWP_NOACTIVATE | SWP_FRAMECHANGED);
+}
+
+bool EmbedDesktopWidget(HWND window, const RECT& screen_bounds) {
+  HWND host = DesktopIconHost();
+  if (host == nullptr) return false;
+
+  LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
+  style &= ~static_cast<LONG_PTR>(WS_POPUP);
+  style |= WS_CHILD | WS_DISABLED;
+  SetWindowLongPtr(window, GWL_STYLE, style);
+  SetLastError(ERROR_SUCCESS);
+  if (SetParent(window, host) == nullptr && GetLastError() != ERROR_SUCCESS) {
+    return false;
+  }
+  PositionDesktopWidget(window, screen_bounds);
+  return true;
 }
 
 // Scale helper to convert logical scaler values to physical using passed in
@@ -403,15 +402,16 @@ bool Win32Window::Create(const std::wstring& title,
         kDesktopWidgetRoundCorners;
     DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
                           &corner_preference, sizeof(corner_preference));
-    // Keep the transparent Flutter surface as a top-level tool window.
-    // Reparenting the GPU-backed view into Explorer/Wallpaper Engine turns the
-    // complete composition surface invisible on current Windows 11 builds.
-    // This is not topmost: normal application windows naturally cover it,
-    // while it remains above desktop wallpaper renderers.
-    SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
-                 widget_bounds.right - widget_bounds.left,
-                 widget_bounds.bottom - widget_bounds.top,
-                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    // Place the widget inside Explorer's desktop hierarchy, immediately below
+    // its icon view and above the wallpaper layer. Cross-process
+    // HTTRANSPARENT is not reliable enough for a full-height Flutter surface;
+    // this hierarchy lets Explorer receive icon clicks normally.
+    if (!EmbedDesktopWidget(window, widget_bounds)) {
+      SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
+                   widget_bounds.right - widget_bounds.left,
+                   widget_bounds.bottom - widget_bounds.top,
+                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
+    }
   }
 
   const bool created = OnCreate();
@@ -557,9 +557,7 @@ Win32Window::MessageHandler(HWND hwnd,
             DesktopMonitorAtIndex(desktop_widget_monitor_index_);
         const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
         const RECT bounds = DesktopWidgetBounds(monitor, dpi);
-        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
-                     bounds.right - bounds.left, bounds.bottom - bounds.top,
-                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        PositionDesktopWidget(hwnd, bounds);
         return 0;
       }
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
@@ -577,9 +575,7 @@ Win32Window::MessageHandler(HWND hwnd,
             DesktopMonitorAtIndex(desktop_widget_monitor_index_);
         const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
         const RECT bounds = DesktopWidgetBounds(monitor, dpi);
-        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
-                     bounds.right - bounds.left, bounds.bottom - bounds.top,
-                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        PositionDesktopWidget(hwnd, bounds);
         return 0;
       }
       break;
