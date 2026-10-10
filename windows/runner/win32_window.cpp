@@ -44,8 +44,8 @@ static int g_active_window_count = 0;
 
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
-constexpr UINT kSpawnWorkerMessage = 0x052C;
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
+constexpr UINT_PTR kDesktopWidgetLayerTimerId = 2;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayOpenCommand = 41001;
 constexpr UINT kTrayToggleWidgetCommand = 41002;
@@ -176,15 +176,6 @@ BOOL CALLBACK FindDesktopIconHost(HWND top_level, LPARAM lparam) {
 
 HWND DesktopIconHost() {
   HWND progman = FindWindow(L"Progman", nullptr);
-  if (progman != nullptr) {
-    DWORD_PTR unused = 0;
-    SendMessageTimeout(progman, kSpawnWorkerMessage, 0, 0, SMTO_NORMAL, 1000,
-                       &unused);
-    SendMessageTimeout(progman, kSpawnWorkerMessage, 0xD, 0, SMTO_NORMAL,
-                       1000, &unused);
-    SendMessageTimeout(progman, kSpawnWorkerMessage, 0xD, 1, SMTO_NORMAL,
-                       1000, &unused);
-  }
   if (progman != nullptr &&
       FindWindowEx(progman, nullptr, L"SHELLDLL_DefView", nullptr) !=
           nullptr) {
@@ -195,7 +186,9 @@ HWND DesktopIconHost() {
   return icon_host != nullptr ? icon_host : progman;
 }
 
-void PositionDesktopWidget(HWND window, const RECT& screen_bounds) {
+void PositionDesktopWidget(HWND window,
+                           const RECT& screen_bounds,
+                           bool frame_changed = false) {
   HWND host = GetParent(window);
   POINT origin{screen_bounds.left, screen_bounds.top};
   HWND insert_after = HWND_TOP;
@@ -208,7 +201,19 @@ void PositionDesktopWidget(HWND window, const RECT& screen_bounds) {
   SetWindowPos(window, insert_after, origin.x, origin.y,
                screen_bounds.right - screen_bounds.left,
                screen_bounds.bottom - screen_bounds.top,
-               SWP_NOACTIVATE | SWP_FRAMECHANGED);
+               SWP_NOACTIVATE | (frame_changed ? SWP_FRAMECHANGED : 0));
+}
+
+void MaintainDesktopWidgetLayer(HWND window) {
+  HWND host = GetParent(window);
+  if (host == nullptr) return;
+  HWND icon_view =
+      FindWindowEx(host, nullptr, L"SHELLDLL_DefView", nullptr);
+  if (icon_view == nullptr || GetWindow(icon_view, GW_HWNDNEXT) == window) {
+    return;
+  }
+  SetWindowPos(window, icon_view, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
 }
 
 bool EmbedDesktopWidget(HWND window, const RECT& screen_bounds) {
@@ -223,7 +228,7 @@ bool EmbedDesktopWidget(HWND window, const RECT& screen_bounds) {
   if (SetParent(window, host) == nullptr && GetLastError() != ERROR_SUCCESS) {
     return false;
   }
-  PositionDesktopWidget(window, screen_bounds);
+  PositionDesktopWidget(window, screen_bounds, true);
   return true;
 }
 
@@ -406,7 +411,11 @@ bool Win32Window::Create(const std::wstring& title,
     // its icon view and above the wallpaper layer. Cross-process
     // HTTRANSPARENT is not reliable enough for a full-height Flutter surface;
     // this hierarchy lets Explorer receive icon clicks normally.
-    if (!EmbedDesktopWidget(window, widget_bounds)) {
+    if (EmbedDesktopWidget(window, widget_bounds)) {
+      // Wallpaper Engine may reorder its WorkerW shortly after startup. Keep
+      // this child directly below the icon view without blocking Explorer.
+      SetTimer(window, kDesktopWidgetLayerTimerId, 500, nullptr);
+    } else {
       SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
                    widget_bounds.right - widget_bounds.left,
                    widget_bounds.bottom - widget_bounds.top,
@@ -462,6 +471,14 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_TIMER:
+      if (desktop_widget_mode_ &&
+          wparam == kDesktopWidgetLayerTimerId) {
+        MaintainDesktopWidgetLayer(hwnd);
+        return 0;
+      }
+      break;
+
     case WM_NCHITTEST:
       if (desktop_widget_mode_) {
         // The widget is display-only. Its transparent surface spans most of
@@ -536,6 +553,9 @@ Win32Window::MessageHandler(HWND hwnd,
       break;
 
     case WM_DESTROY:
+      if (desktop_widget_mode_) {
+        KillTimer(hwnd, kDesktopWidgetLayerTimerId);
+      }
       if (tray_icon_added_) {
         NOTIFYICONDATA icon{};
         icon.cbSize = sizeof(icon);
