@@ -45,7 +45,6 @@ static int g_active_window_count = 0;
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
-constexpr UINT_PTR kDesktopWidgetLayerTimerId = 2;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayOpenCommand = 41001;
 constexpr UINT kTrayToggleWidgetCommand = 41002;
@@ -163,73 +162,6 @@ void EnableTransparentComposition(HWND window) {
     set_window_composition_attribute(window, &data);
   }
   FreeLibrary(user32);
-}
-
-BOOL CALLBACK FindDesktopIconHost(HWND top_level, LPARAM lparam) {
-  if (FindWindowEx(top_level, nullptr, L"SHELLDLL_DefView", nullptr) !=
-      nullptr) {
-    *reinterpret_cast<HWND*>(lparam) = top_level;
-    return FALSE;
-  }
-  return TRUE;
-}
-
-HWND DesktopIconHost() {
-  HWND progman = FindWindow(L"Progman", nullptr);
-  if (progman != nullptr &&
-      FindWindowEx(progman, nullptr, L"SHELLDLL_DefView", nullptr) !=
-          nullptr) {
-    return progman;
-  }
-  HWND icon_host = nullptr;
-  EnumWindows(FindDesktopIconHost, reinterpret_cast<LPARAM>(&icon_host));
-  return icon_host != nullptr ? icon_host : progman;
-}
-
-void PositionDesktopWidget(HWND window,
-                           const RECT& screen_bounds,
-                           bool frame_changed = false) {
-  HWND host = GetParent(window);
-  POINT origin{screen_bounds.left, screen_bounds.top};
-  HWND insert_after = HWND_TOP;
-  if (host != nullptr) {
-    ScreenToClient(host, &origin);
-    HWND icon_view =
-        FindWindowEx(host, nullptr, L"SHELLDLL_DefView", nullptr);
-    if (icon_view != nullptr) insert_after = icon_view;
-  }
-  SetWindowPos(window, insert_after, origin.x, origin.y,
-               screen_bounds.right - screen_bounds.left,
-               screen_bounds.bottom - screen_bounds.top,
-               SWP_NOACTIVATE | (frame_changed ? SWP_FRAMECHANGED : 0));
-}
-
-void MaintainDesktopWidgetLayer(HWND window) {
-  HWND host = GetParent(window);
-  if (host == nullptr) return;
-  HWND icon_view =
-      FindWindowEx(host, nullptr, L"SHELLDLL_DefView", nullptr);
-  if (icon_view == nullptr || GetWindow(icon_view, GW_HWNDNEXT) == window) {
-    return;
-  }
-  SetWindowPos(window, icon_view, 0, 0, 0, 0,
-               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
-}
-
-bool EmbedDesktopWidget(HWND window, const RECT& screen_bounds) {
-  HWND host = DesktopIconHost();
-  if (host == nullptr) return false;
-
-  LONG_PTR style = GetWindowLongPtr(window, GWL_STYLE);
-  style &= ~static_cast<LONG_PTR>(WS_POPUP);
-  style |= WS_CHILD | WS_DISABLED;
-  SetWindowLongPtr(window, GWL_STYLE, style);
-  SetLastError(ERROR_SUCCESS);
-  if (SetParent(window, host) == nullptr && GetLastError() != ERROR_SUCCESS) {
-    return false;
-  }
-  PositionDesktopWidget(window, screen_bounds, true);
-  return true;
 }
 
 // Scale helper to convert logical scaler values to physical using passed in
@@ -407,20 +339,13 @@ bool Win32Window::Create(const std::wstring& title,
         kDesktopWidgetRoundCorners;
     DwmSetWindowAttribute(window, DWMWA_WINDOW_CORNER_PREFERENCE,
                           &corner_preference, sizeof(corner_preference));
-    // Place the widget inside Explorer's desktop hierarchy, immediately below
-    // its icon view and above the wallpaper layer. Cross-process
-    // HTTRANSPARENT is not reliable enough for a full-height Flutter surface;
-    // this hierarchy lets Explorer receive icon clicks normally.
-    if (EmbedDesktopWidget(window, widget_bounds)) {
-      // Wallpaper Engine may reorder its WorkerW shortly after startup. Keep
-      // this child directly below the icon view without blocking Explorer.
-      SetTimer(window, kDesktopWidgetLayerTimerId, 500, nullptr);
-    } else {
-      SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
-                   widget_bounds.right - widget_bounds.left,
-                   widget_bounds.bottom - widget_bounds.top,
-                   SWP_NOACTIVATE | SWP_FRAMECHANGED);
-    }
+    // Keep the GPU-backed Flutter surface independent from Explorer. Making
+    // it a cross-process child can stall the desktop until Flutter's first
+    // frame and may hide the surface behind Wallpaper Engine.
+    SetWindowPos(window, HWND_TOP, widget_bounds.left, widget_bounds.top,
+                 widget_bounds.right - widget_bounds.left,
+                 widget_bounds.bottom - widget_bounds.top,
+                 SWP_NOACTIVATE | SWP_FRAMECHANGED);
   }
 
   const bool created = OnCreate();
@@ -471,14 +396,6 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
-    case WM_TIMER:
-      if (desktop_widget_mode_ &&
-          wparam == kDesktopWidgetLayerTimerId) {
-        MaintainDesktopWidgetLayer(hwnd);
-        return 0;
-      }
-      break;
-
     case WM_NCHITTEST:
       if (desktop_widget_mode_) {
         // The widget is display-only. Its transparent surface spans most of
@@ -553,9 +470,6 @@ Win32Window::MessageHandler(HWND hwnd,
       break;
 
     case WM_DESTROY:
-      if (desktop_widget_mode_) {
-        KillTimer(hwnd, kDesktopWidgetLayerTimerId);
-      }
       if (tray_icon_added_) {
         NOTIFYICONDATA icon{};
         icon.cbSize = sizeof(icon);
@@ -577,7 +491,9 @@ Win32Window::MessageHandler(HWND hwnd,
             DesktopMonitorAtIndex(desktop_widget_monitor_index_);
         const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
         const RECT bounds = DesktopWidgetBounds(monitor, dpi);
-        PositionDesktopWidget(hwnd, bounds);
+        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
+                     bounds.right - bounds.left, bounds.bottom - bounds.top,
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
         return 0;
       }
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
@@ -595,7 +511,9 @@ Win32Window::MessageHandler(HWND hwnd,
             DesktopMonitorAtIndex(desktop_widget_monitor_index_);
         const UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
         const RECT bounds = DesktopWidgetBounds(monitor, dpi);
-        PositionDesktopWidget(hwnd, bounds);
+        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top,
+                     bounds.right - bounds.left, bounds.bottom - bounds.top,
+                     SWP_NOACTIVATE | SWP_FRAMECHANGED);
         return 0;
       }
       break;
