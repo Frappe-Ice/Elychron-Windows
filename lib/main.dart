@@ -54,6 +54,23 @@ void main(List<String> arguments) async {
   await db.init();
   if (Platform.isWindows) {
     try {
+      final nativeWidgetVisible =
+          await WindowsStartupService.readWidgetVisible();
+      if (nativeWidgetVisible == null) {
+        await WindowsStartupService.setWidgetVisible(
+          db.getWindowsWidgetVisible(),
+        );
+      } else {
+        await db.setWindowsWidgetVisible(nativeWidgetVisible);
+      }
+      final nativeCloseToTray = await WindowsStartupService.readCloseToTray();
+      if (nativeCloseToTray == null) {
+        await WindowsStartupService.setCloseToTray(
+          db.getWindowsCloseToTray(),
+        );
+      } else {
+        await db.setWindowsCloseToTray(nativeCloseToTray);
+      }
       await WindowsStartupService.applyWidgetAutoStart(
         db.getWindowsWidgetAutoStart(),
       );
@@ -92,6 +109,9 @@ void main(List<String> arguments) async {
   runApp(const CelechronApp());
   unawaited(DesktopWidgetService.startPublishing());
   if (Platform.isWindows) {
+    if (db.getWindowsWidgetVisible()) {
+      unawaited(DesktopWidgetService.showWidget(remember: false));
+    }
     // PTA owns a persistent WebView2 profile and starts independently of the
     // selected tab, so its cookies are restored and its task list can refresh
     // even when the user does not open the PTA page in this session.
@@ -258,7 +278,7 @@ class _CelechronAppState extends State<CelechronApp>
       () => unawaited(_runWindowsAutoRefresh()),
     );
     _windowsAutoRefreshTimer ??= Timer.periodic(
-      const Duration(minutes: 15),
+      const Duration(minutes: 5),
       (_) => unawaited(_runWindowsAutoRefresh()),
     );
   }
@@ -267,7 +287,7 @@ class _CelechronAppState extends State<CelechronApp>
     if (!Platform.isWindows) return;
     final last = _lastWindowsAutoRefreshAttempt;
     if (last != null &&
-        DateTime.now().difference(last) < const Duration(minutes: 15)) {
+        DateTime.now().difference(last) < const Duration(minutes: 5)) {
       return;
     }
     await _runWindowsAutoRefresh();

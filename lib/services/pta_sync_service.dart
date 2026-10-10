@@ -19,7 +19,7 @@ final class PtaSyncService extends ChangeNotifier {
   /// /problem-sets catalogue also contains paid courses/books and must never
   /// be treated as the user's assigned work.
   static const dashboardUrl = 'https://pintia.cn/problem-sets/dashboard';
-  static const refreshInterval = Duration(minutes: 15);
+  static const refreshInterval = Duration(minutes: 5);
   static const _dashboardPollInterval = Duration(seconds: 2);
   static const _dashboardPollAttempts = 30;
 

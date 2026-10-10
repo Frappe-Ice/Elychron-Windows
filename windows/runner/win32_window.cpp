@@ -2,6 +2,7 @@
 
 #include <dwmapi.h>
 #include <flutter_windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <cwchar>
@@ -44,6 +45,57 @@ static int g_active_window_count = 0;
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
 constexpr UINT kSpawnWorkerMessage = 0x052C;
+constexpr UINT kTrayCallbackMessage = WM_APP + 1;
+constexpr UINT kTrayIconId = 1;
+constexpr UINT kTrayOpenCommand = 41001;
+constexpr UINT kTrayToggleWidgetCommand = 41002;
+constexpr UINT kTrayExitCommand = 41003;
+constexpr const wchar_t kElychronPreferencesKey[] =
+    L"Software\\Elychron\\Windows";
+
+bool ReadElychronBoolean(const wchar_t* name, bool default_value) {
+  DWORD value = default_value ? 1 : 0;
+  DWORD size = sizeof(value);
+  if (RegGetValue(HKEY_CURRENT_USER, kElychronPreferencesKey, name,
+                  RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
+    return default_value;
+  }
+  return value != 0;
+}
+
+void WriteElychronBoolean(const wchar_t* name, bool value) {
+  HKEY key = nullptr;
+  if (RegCreateKeyEx(HKEY_CURRENT_USER, kElychronPreferencesKey, 0, nullptr, 0,
+                     KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS) {
+    return;
+  }
+  const DWORD stored = value ? 1 : 0;
+  RegSetValueEx(key, name, 0, REG_DWORD,
+                reinterpret_cast<const BYTE*>(&stored), sizeof(stored));
+  RegCloseKey(key);
+}
+
+void StartDesktopWidgets() {
+  wchar_t executable[MAX_PATH]{};
+  if (GetModuleFileName(nullptr, executable, MAX_PATH) == 0) return;
+  std::wstring command =
+      L"\"" + std::wstring(executable) + L"\" --desktop-widget";
+  STARTUPINFO startup_info{sizeof(STARTUPINFO)};
+  PROCESS_INFORMATION process_info{};
+  if (CreateProcess(nullptr, command.data(), nullptr, nullptr, FALSE, 0,
+                    nullptr, nullptr, &startup_info, &process_info)) {
+    CloseHandle(process_info.hThread);
+    CloseHandle(process_info.hProcess);
+  }
+}
+
+void StopDesktopWidgets() {
+  HANDLE stop_event =
+      OpenEvent(EVENT_MODIFY_STATE, FALSE, L"Local\\ElychronDesktopWidgetStop");
+  if (stop_event == nullptr) return;
+  SetEvent(stop_event);
+  CloseHandle(stop_event);
+}
 
 struct DesktopMonitorDescriptor {
   HMONITOR handle;
@@ -351,10 +403,24 @@ bool Win32Window::Create(const std::wstring& title,
                  SWP_NOACTIVATE | SWP_FRAMECHANGED);
   }
 
-  return OnCreate();
+  const bool created = OnCreate();
+  if (created && !desktop_widget_mode_) {
+    NOTIFYICONDATA icon{};
+    icon.cbSize = sizeof(icon);
+    icon.hWnd = window_handle_;
+    icon.uID = kTrayIconId;
+    icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
+    icon.uCallbackMessage = kTrayCallbackMessage;
+    icon.hIcon =
+        LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
+    wcscpy_s(icon.szTip, L"Elychron");
+    tray_icon_added_ = Shell_NotifyIcon(NIM_ADD, &icon) == TRUE;
+  }
+  return created;
 }
 
 bool Win32Window::Show() {
+  if (start_hidden_ && !desktop_widget_mode_) return true;
   return ShowWindow(window_handle_,
                     desktop_widget_mode_ ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
 }
@@ -385,7 +451,79 @@ Win32Window::MessageHandler(HWND hwnd,
                             WPARAM const wparam,
                             LPARAM const lparam) noexcept {
   switch (message) {
+    case WM_CLOSE:
+      if (!desktop_widget_mode_ && !exit_requested_ &&
+          ReadElychronBoolean(L"CloseToTray", true)) {
+        ShowWindow(hwnd, SW_HIDE);
+        return 0;
+      }
+      if (!desktop_widget_mode_) StopDesktopWidgets();
+      DestroyWindow(hwnd);
+      return 0;
+
+    case WM_COMMAND:
+      switch (LOWORD(wparam)) {
+        case kTrayOpenCommand:
+          start_hidden_ = false;
+          ShowWindow(hwnd, SW_RESTORE);
+          SetForegroundWindow(hwnd);
+          return 0;
+        case kTrayToggleWidgetCommand: {
+          const bool visible = ReadElychronBoolean(L"WidgetVisible", true);
+          WriteElychronBoolean(L"WidgetVisible", !visible);
+          if (visible) {
+            StopDesktopWidgets();
+          } else {
+            StartDesktopWidgets();
+          }
+          return 0;
+        }
+        case kTrayExitCommand:
+          exit_requested_ = true;
+          SendMessage(hwnd, WM_CLOSE, 0, 0);
+          return 0;
+      }
+      break;
+
+    case kTrayCallbackMessage:
+      if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK) {
+        start_hidden_ = false;
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+        return 0;
+      }
+      if (lparam == WM_RBUTTONUP || lparam == WM_CONTEXTMENU) {
+        const bool widget_visible =
+            ReadElychronBoolean(L"WidgetVisible", true);
+        HMENU menu = CreatePopupMenu();
+        AppendMenu(menu, MF_STRING, kTrayOpenCommand,
+                   L"\u6253\u5F00 Elychron");
+        AppendMenu(menu, MF_STRING, kTrayToggleWidgetCommand,
+                   widget_visible
+                       ? L"\u5173\u95ED\u684C\u9762\u6302\u4EF6"
+                       : L"\u6253\u5F00\u684C\u9762\u6302\u4EF6");
+        AppendMenu(menu, MF_SEPARATOR, 0, nullptr);
+        AppendMenu(menu, MF_STRING, kTrayExitCommand,
+                   L"\u9000\u51FA Elychron");
+        POINT cursor{};
+        GetCursorPos(&cursor);
+        SetForegroundWindow(hwnd);
+        TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_BOTTOMALIGN,
+                       cursor.x, cursor.y, 0, hwnd, nullptr);
+        DestroyMenu(menu);
+        return 0;
+      }
+      break;
+
     case WM_DESTROY:
+      if (tray_icon_added_) {
+        NOTIFYICONDATA icon{};
+        icon.cbSize = sizeof(icon);
+        icon.hWnd = hwnd;
+        icon.uID = kTrayIconId;
+        Shell_NotifyIcon(NIM_DELETE, &icon);
+        tray_icon_added_ = false;
+      }
       window_handle_ = nullptr;
       Destroy();
       if (quit_on_close_) {
@@ -494,6 +632,10 @@ void Win32Window::SetQuitOnClose(bool quit_on_close) {
 
 void Win32Window::SetDesktopWidgetMode(bool enabled) {
   desktop_widget_mode_ = enabled;
+}
+
+void Win32Window::SetStartHidden(bool hidden) {
+  start_hidden_ = hidden;
 }
 
 void Win32Window::SetDesktopWidgetMonitor(int monitor_index) {

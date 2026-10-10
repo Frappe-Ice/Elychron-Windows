@@ -109,6 +109,8 @@ class DatabaseHelper {
   final String kHideHomeGpa = 'hideHomeGpa';
   final String kAsyncRefresh = 'asyncRefresh';
   final String kWindowsWidgetAutoStart = 'windowsWidgetAutoStart';
+  final String kWindowsWidgetVisible = 'windowsWidgetVisible';
+  final String kWindowsCloseToTray = 'windowsCloseToTray';
 
   Option getOption() {
     return Option(
@@ -131,6 +133,28 @@ class DatabaseHelper {
 
   Future<void> setWindowsWidgetAutoStart(bool enabled) async {
     await optionsBox.put(kWindowsWidgetAutoStart, enabled);
+  }
+
+  bool getWindowsWidgetVisible() {
+    final value = optionsBox.get(kWindowsWidgetVisible);
+    if (value is bool) return value;
+    optionsBox.put(kWindowsWidgetVisible, true);
+    return true;
+  }
+
+  Future<void> setWindowsWidgetVisible(bool visible) async {
+    await optionsBox.put(kWindowsWidgetVisible, visible);
+  }
+
+  bool getWindowsCloseToTray() {
+    final value = optionsBox.get(kWindowsCloseToTray);
+    if (value is bool) return value;
+    optionsBox.put(kWindowsCloseToTray, true);
+    return true;
+  }
+
+  Future<void> setWindowsCloseToTray(bool enabled) async {
+    await optionsBox.put(kWindowsCloseToTray, enabled);
   }
 
   /// 默认提醒提前量（分钟）：活动锚开始时间、截止锚截止时间，各自再提前这么多。

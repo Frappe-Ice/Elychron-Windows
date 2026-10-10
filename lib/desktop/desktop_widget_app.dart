@@ -65,6 +65,14 @@ class _DesktopAgendaWidgetState extends State<DesktopAgendaWidget> {
             item.kind == DesktopAgendaKind.exam ||
             item.kind == DesktopAgendaKind.event)
         .toList(growable: false);
+    final todaySchedule = scheduleItems
+        .where((item) => _isSameDay(item.startTime, now))
+        .toList(growable: false);
+    final tomorrow =
+        DateTime(now.year, now.month, now.day).add(const Duration(days: 1));
+    final tomorrowSchedule = scheduleItems
+        .where((item) => _isSameDay(item.startTime, tomorrow))
+        .toList(growable: false);
     final todoItems = items
         .where((item) =>
             item.kind == DesktopAgendaKind.deadline ||
@@ -122,7 +130,14 @@ class _DesktopAgendaWidgetState extends State<DesktopAgendaWidget> {
                     _AgendaSection(
                       title: '今日课程与日程',
                       emptyText: '今天没有课程或日程',
-                      items: scheduleItems,
+                      items: todaySchedule,
+                      now: now,
+                    ),
+                    const SizedBox(height: 7),
+                    _AgendaSection(
+                      title: '明日课程与日程',
+                      emptyText: '明天没有课程或日程',
+                      items: tomorrowSchedule,
                       now: now,
                     ),
                     const SizedBox(height: 7),
@@ -153,6 +168,11 @@ class _DesktopAgendaWidgetState extends State<DesktopAgendaWidget> {
       ),
     );
   }
+
+  static bool _isSameDay(DateTime left, DateTime right) =>
+      left.year == right.year &&
+      left.month == right.month &&
+      left.day == right.day;
 }
 
 class _AgendaRow extends StatelessWidget {

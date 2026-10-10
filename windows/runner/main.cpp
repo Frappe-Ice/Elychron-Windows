@@ -104,6 +104,9 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   const bool desktop_widget =
       std::find(command_line_arguments.begin(), command_line_arguments.end(),
                 "--desktop-widget") != command_line_arguments.end();
+  const bool background =
+      std::find(command_line_arguments.begin(), command_line_arguments.end(),
+                "--background") != command_line_arguments.end();
   const int widget_monitor_index =
       WidgetMonitorIndex(command_line_arguments);
   HANDLE widget_mutex = nullptr;
@@ -125,11 +128,27 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
   }
 
+  HANDLE main_mutex = nullptr;
+  if (!desktop_widget) {
+    main_mutex = CreateMutex(nullptr, FALSE, L"Local\\ElychronMainInstance");
+    if (main_mutex == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) {
+      HWND existing = FindWindow(L"FLUTTER_RUNNER_WIN32_WINDOW", L"Elychron");
+      if (existing != nullptr && !background) {
+        ShowWindow(existing, SW_RESTORE);
+        SetForegroundWindow(existing);
+      }
+      if (main_mutex != nullptr) CloseHandle(main_mutex);
+      ::CoUninitialize();
+      return EXIT_SUCCESS;
+    }
+  }
+
   project.set_dart_entrypoint_arguments(command_line_arguments);
 
   FlutterWindow window(project);
   window.SetDesktopWidgetMode(desktop_widget);
   window.SetDesktopWidgetMonitor(widget_monitor_index);
+  window.SetStartHidden(background);
   Win32Window::Point origin(desktop_widget ? 0 : 10,
                            desktop_widget ? 0 : 10);
   Win32Window::Size size(desktop_widget ? 280 : 1280,
@@ -138,6 +157,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
                      origin, size)) {
     if (widget_stop_event != nullptr) CloseHandle(widget_stop_event);
     if (widget_mutex != nullptr) CloseHandle(widget_mutex);
+    if (main_mutex != nullptr) CloseHandle(main_mutex);
     return EXIT_FAILURE;
   }
   window.SetQuitOnClose(true);
@@ -167,6 +187,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
 
   if (widget_stop_event != nullptr) CloseHandle(widget_stop_event);
   if (widget_mutex != nullptr) CloseHandle(widget_mutex);
+  if (main_mutex != nullptr) CloseHandle(main_mutex);
 
   ::CoUninitialize();
   return EXIT_SUCCESS;

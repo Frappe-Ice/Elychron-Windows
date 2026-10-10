@@ -60,9 +60,6 @@ class _TaskCreatePageState extends State<TaskCreatePage> {
       now.startTime = endOfDay;
       now.repeatEndsTime = dateOnly(endOfDay);
     }
-
-    // 标题变化时刷新「新建」按钮的可用状态
-    _titleController.addListener(() => setState(() {}));
   }
 
   @override
@@ -508,13 +505,19 @@ class _TaskCreatePageState extends State<TaskCreatePage> {
               child: const Icon(Icons.auto_awesome, size: 21),
             ),
             const SizedBox(width: 14),
-            CupertinoButton(
-              padding: EdgeInsets.zero,
-              onPressed: _canCreate ? _saveAndExit : null,
+            ValueListenableBuilder<TextEditingValue>(
+              valueListenable: _titleController,
+              builder: (context, value, child) => CupertinoButton(
+                padding: EdgeInsets.zero,
+                onPressed: value.text.trim().isNotEmpty ? _saveAndExit : null,
+                child: child!,
+              ),
               child: Text(
                 widget.confirmLabel,
-                style:
-                    const TextStyle(fontSize: 17, fontWeight: FontWeight.w600),
+                style: const TextStyle(
+                  fontSize: 17,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ],
@@ -718,8 +721,7 @@ class _TaskCreatePageState extends State<TaskCreatePage> {
                             style: TextStyle(fontSize: 16, color: textColor)),
                         const Spacer(),
                         Text('${now.subtasks.length} 步',
-                            style:
-                                TextStyle(fontSize: 14, color: labelColor)),
+                            style: TextStyle(fontSize: 14, color: labelColor)),
                       ],
                     ),
                   ),
@@ -758,8 +760,7 @@ class _TaskCreatePageState extends State<TaskCreatePage> {
                               ),
                               Expanded(
                                 child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment.start,
+                                  crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
                                     Text(
                                       sub.title.isEmpty ? '(未命名步骤)' : sub.title,
@@ -778,8 +779,8 @@ class _TaskCreatePageState extends State<TaskCreatePage> {
                               CupertinoButton(
                                 padding: EdgeInsets.zero,
                                 minimumSize: const Size(28, 28),
-                                onPressed: () =>
-                                    setState(() => now.subtasks.removeAt(index)),
+                                onPressed: () => setState(
+                                    () => now.subtasks.removeAt(index)),
                                 child: Icon(CupertinoIcons.xmark_circle_fill,
                                     size: 18,
                                     color: CupertinoDynamicColor.resolve(

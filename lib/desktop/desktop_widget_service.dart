@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:celechron/desktop/desktop_widget_snapshot.dart';
+import 'package:celechron/desktop/windows_startup_service.dart';
+import 'package:celechron/database/database_helper.dart';
 import 'package:celechron/model/scholar.dart';
 import 'package:celechron/model/task.dart';
 import 'package:get/get.dart';
@@ -65,8 +67,14 @@ final class DesktopWidgetService {
     }
   }
 
-  static Future<void> showWidget() async {
+  static Future<void> showWidget({bool remember = true}) async {
     if (!Platform.isWindows) return;
+    if (remember) {
+      if (Get.isRegistered<DatabaseHelper>(tag: 'db')) {
+        await Get.find<DatabaseHelper>(tag: 'db').setWindowsWidgetVisible(true);
+      }
+      await WindowsStartupService.setWidgetVisible(true);
+    }
     await publishNow();
     await Process.start(
       Platform.resolvedExecutable,
@@ -75,8 +83,15 @@ final class DesktopWidgetService {
     );
   }
 
-  static Future<void> hideWidget() async {
+  static Future<void> hideWidget({bool remember = true}) async {
     if (!Platform.isWindows) return;
+    if (remember) {
+      if (Get.isRegistered<DatabaseHelper>(tag: 'db')) {
+        await Get.find<DatabaseHelper>(tag: 'db')
+            .setWindowsWidgetVisible(false);
+      }
+      await WindowsStartupService.setWidgetVisible(false);
+    }
     await Process.start(
       Platform.resolvedExecutable,
       const [closeWidgetArgument],

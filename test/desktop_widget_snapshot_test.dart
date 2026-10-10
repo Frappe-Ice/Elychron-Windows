@@ -56,6 +56,27 @@ void main() {
     expect(snapshot.items.single.id, 'period:overnight');
   });
 
+  test('includes tomorrow courses but not the day after tomorrow', () {
+    Period course(String id, DateTime start) => Period(
+          uid: id,
+          type: PeriodType.classes,
+          summary: id,
+          startTime: start,
+          endTime: start.add(const Duration(hours: 1)),
+        );
+
+    final snapshot = DesktopWidgetSnapshot.forDay(
+      now: now,
+      periods: [
+        course('tomorrow', DateTime(2026, 10, 9, 8)),
+        course('later', DateTime(2026, 10, 10, 8)),
+      ],
+      tasks: const [],
+    );
+
+    expect(snapshot.items.map((item) => item.id), ['period:tomorrow']);
+  });
+
   test('omits completed tasks and memos from the desktop agenda', () {
     Task task(String id, TaskType type, TaskStatus status) => Task(
           uid: id,

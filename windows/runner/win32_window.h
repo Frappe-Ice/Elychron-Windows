@@ -59,6 +59,10 @@ class Win32Window {
   // Selects the display whose right edge hosts this widget instance.
   void SetDesktopWidgetMonitor(int monitor_index);
 
+  // Starts the normal app as a tray/background process without showing its
+  // main window after Flutter renders the first frame.
+  void SetStartHidden(bool hidden);
+
   // Return a RECT representing the bounds of the current client area.
   RECT GetClientArea();
 
@@ -99,6 +103,9 @@ class Win32Window {
 
   bool quit_on_close_ = false;
   bool desktop_widget_mode_ = false;
+  bool start_hidden_ = false;
+  bool tray_icon_added_ = false;
+  bool exit_requested_ = false;
   int desktop_widget_monitor_index_ = 0;
 
   // window handle for top level window.

@@ -5,9 +5,12 @@ import 'dart:io';
 final class WindowsStartupService {
   static const _runKey = r'HKCU\Software\Microsoft\Windows\CurrentVersion\Run';
   static const _runValueName = 'ElychronDesktopWidget';
+  static const _preferencesKey = r'HKCU\Software\Elychron\Windows';
+  static const _widgetVisibleValue = 'WidgetVisible';
+  static const _closeToTrayValue = 'CloseToTray';
 
   static String get widgetStartupCommand =>
-      '"${Platform.resolvedExecutable}" --desktop-widget';
+      '"${Platform.resolvedExecutable}" --background';
 
   static Future<void> applyWidgetAutoStart(bool enabled) async {
     if (!Platform.isWindows) return;
@@ -36,6 +39,54 @@ final class WindowsStartupService {
     if (result.exitCode != 0 && enabled) {
       throw WindowsIntegrationException(
         '无法写入开机启动项（退出码 ${result.exitCode}）',
+      );
+    }
+  }
+
+  static Future<void> setWidgetVisible(bool visible) =>
+      _writeBoolean(_widgetVisibleValue, visible);
+
+  static Future<void> setCloseToTray(bool enabled) =>
+      _writeBoolean(_closeToTrayValue, enabled);
+
+  static Future<bool?> readWidgetVisible() => _readBoolean(_widgetVisibleValue);
+
+  static Future<bool?> readCloseToTray() => _readBoolean(_closeToTrayValue);
+
+  static Future<bool?> _readBoolean(String name) async {
+    if (!Platform.isWindows) return null;
+    final result = await Process.run(
+      'reg.exe',
+      ['query', _preferencesKey, '/v', name],
+      runInShell: false,
+    );
+    if (result.exitCode != 0) return null;
+    final match = RegExp(r'REG_DWORD\s+0x([0-9a-fA-F]+)')
+        .firstMatch(result.stdout.toString());
+    if (match == null) return null;
+    return int.parse(match.group(1)!, radix: 16) != 0;
+  }
+
+  static Future<void> _writeBoolean(String name, bool enabled) async {
+    if (!Platform.isWindows) return;
+    final result = await Process.run(
+      'reg.exe',
+      [
+        'add',
+        _preferencesKey,
+        '/v',
+        name,
+        '/t',
+        'REG_DWORD',
+        '/d',
+        enabled ? '1' : '0',
+        '/f',
+      ],
+      runInShell: false,
+    );
+    if (result.exitCode != 0) {
+      throw WindowsIntegrationException(
+        '无法保存 Windows 设置（退出码 ${result.exitCode}）',
       );
     }
   }

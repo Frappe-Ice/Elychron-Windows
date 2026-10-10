@@ -18,15 +18,19 @@ class DesktopWidgetSnapshot {
     required Iterable<Task> tasks,
   }) {
     final dayStart = DateTime(now.year, now.month, now.day);
-    final dayEnd = dayStart.add(const Duration(days: 1));
-    final taskHorizon = dayEnd.add(const Duration(days: 7));
+    // Courses and events cover today plus tomorrow. Deadlines keep the wider
+    // upcoming horizon so assignments are never hidden just because they are
+    // more than a day away.
+    final scheduleEnd = dayStart.add(const Duration(days: 2));
+    final taskHorizon = dayStart.add(const Duration(days: 8));
     final items = <DesktopAgendaItem>[];
 
     for (final period in periods) {
       if (period.type != PeriodType.classes && period.type != PeriodType.test) {
         continue;
       }
-      if (!_overlapsDay(period.startTime, period.endTime, dayStart, dayEnd)) {
+      if (!_overlapsDay(
+          period.startTime, period.endTime, dayStart, scheduleEnd)) {
         continue;
       }
       items.add(DesktopAgendaItem(
@@ -46,7 +50,7 @@ class DesktopWidgetSnapshot {
       final start = task.isEvent ? task.startTime : task.endTime;
       final end = task.isEvent ? task.endTime : task.endTime;
       final shouldInclude = task.isEvent
-          ? _overlapsDay(start, end, dayStart, dayEnd)
+          ? _overlapsDay(start, end, dayStart, scheduleEnd)
           : _isRelevantUpcomingTask(task, dayStart, taskHorizon);
       if (!shouldInclude) continue;
       items.add(DesktopAgendaItem(

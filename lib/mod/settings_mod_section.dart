@@ -50,27 +50,9 @@ Widget modWindowsSection(
       children: const [
         _WindowsSyncStatusTile(),
         _WindowsAutoStartTile(),
+        _WindowsWidgetVisibleTile(),
+        _WindowsCloseBehaviorTile(),
         _WindowsShortcutTile(),
-        CupertinoListTile(
-          title: Text('桌面日程挂件'),
-          subtitle: Text('在桌面展示今日课程、日程和待办'),
-          trailing: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              CupertinoButton(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                onPressed: DesktopWidgetService.hideWidget,
-                child: Text('关闭'),
-              ),
-              CupertinoButton(
-                padding: EdgeInsets.symmetric(horizontal: 8),
-                onPressed: DesktopWidgetService.showWidget,
-                child: Text('打开'),
-              ),
-            ],
-          ),
-          onTap: DesktopWidgetService.showWidget,
-        ),
       ],
     ),
   );
@@ -125,8 +107,8 @@ class _WindowsAutoStartTileState extends State<_WindowsAutoStartTile> {
   @override
   Widget build(BuildContext context) {
     return CupertinoListTile(
-      title: const Text('挂件开机自启动'),
-      subtitle: const Text('登录 Windows 后自动显示挂件，不弹出主窗口'),
+      title: const Text('Windows 后台开机启动'),
+      subtitle: const Text('不弹主窗口；保持托盘、自动同步和挂件更新'),
       trailing: CupertinoSwitch(
         value: _enabled,
         onChanged: _busy ? null : _setEnabled,
@@ -134,6 +116,115 @@ class _WindowsAutoStartTileState extends State<_WindowsAutoStartTile> {
       onTap: _busy ? null : () => _setEnabled(!_enabled),
     );
   }
+}
+
+class _WindowsWidgetVisibleTile extends StatefulWidget {
+  const _WindowsWidgetVisibleTile();
+
+  @override
+  State<_WindowsWidgetVisibleTile> createState() =>
+      _WindowsWidgetVisibleTileState();
+}
+
+class _WindowsWidgetVisibleTileState extends State<_WindowsWidgetVisibleTile> {
+  late bool _visible;
+  bool _busy = false;
+
+  DatabaseHelper get _db => Get.find<DatabaseHelper>(tag: 'db');
+
+  @override
+  void initState() {
+    super.initState();
+    _visible = _db.getWindowsWidgetVisible();
+    unawaited(_loadNativeValue());
+  }
+
+  Future<void> _loadNativeValue() async {
+    final value = await WindowsStartupService.readWidgetVisible();
+    if (value == null) return;
+    await _db.setWindowsWidgetVisible(value);
+    if (mounted) setState(() => _visible = value);
+  }
+
+  Future<void> _setVisible(bool visible) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      if (visible) {
+        await DesktopWidgetService.showWidget();
+      } else {
+        await DesktopWidgetService.hideWidget();
+      }
+      if (mounted) setState(() => _visible = visible);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => CupertinoListTile(
+        title: const Text('显示桌面日程挂件'),
+        subtitle: const Text('展示今天、明天的课程和近期全部待办'),
+        trailing: CupertinoSwitch(
+          value: _visible,
+          onChanged: _busy ? null : _setVisible,
+        ),
+        onTap: _busy ? null : () => _setVisible(!_visible),
+      );
+}
+
+class _WindowsCloseBehaviorTile extends StatefulWidget {
+  const _WindowsCloseBehaviorTile();
+
+  @override
+  State<_WindowsCloseBehaviorTile> createState() =>
+      _WindowsCloseBehaviorTileState();
+}
+
+class _WindowsCloseBehaviorTileState extends State<_WindowsCloseBehaviorTile> {
+  late bool _closeToTray;
+  bool _busy = false;
+
+  DatabaseHelper get _db => Get.find<DatabaseHelper>(tag: 'db');
+
+  @override
+  void initState() {
+    super.initState();
+    _closeToTray = _db.getWindowsCloseToTray();
+    unawaited(_loadNativeValue());
+  }
+
+  Future<void> _loadNativeValue() async {
+    final value = await WindowsStartupService.readCloseToTray();
+    if (value == null) return;
+    await _db.setWindowsCloseToTray(value);
+    if (mounted) setState(() => _closeToTray = value);
+  }
+
+  Future<void> _setCloseToTray(bool enabled) async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await WindowsStartupService.setCloseToTray(enabled);
+      await _db.setWindowsCloseToTray(enabled);
+      if (mounted) setState(() => _closeToTray = enabled);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => CupertinoListTile(
+        title: const Text('关闭按钮最小化到托盘'),
+        subtitle: Text(
+          _closeToTray ? '点击关闭后继续后台同步，可从托盘恢复' : '点击关闭后退出程序和挂件',
+        ),
+        trailing: CupertinoSwitch(
+          value: _closeToTray,
+          onChanged: _busy ? null : _setCloseToTray,
+        ),
+        onTap: _busy ? null : () => _setCloseToTray(!_closeToTray),
+      );
 }
 
 class _WindowsShortcutTile extends StatelessWidget {
