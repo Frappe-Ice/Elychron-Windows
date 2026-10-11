@@ -45,6 +45,7 @@ static int g_active_window_count = 0;
 using EnableNonClientDpiScaling = BOOL __stdcall(HWND hwnd);
 
 constexpr UINT kTrayCallbackMessage = WM_APP + 1;
+constexpr UINT kOpenMainWindowMessage = WM_APP + 2;
 constexpr UINT_PTR kDesktopWidgetVisibilityTimerId = 3;
 constexpr UINT kTrayIconId = 1;
 constexpr UINT kTrayOpenCommand = 41001;
@@ -91,8 +92,11 @@ void StartDesktopWidgets() {
 
 BOOL CALLBACK HideDesktopWidgetWindow(HWND window, LPARAM) {
   wchar_t title[128]{};
-  if (GetWindowText(window, title, 128) > 0 &&
-      wcscmp(title, L"Elychron Desktop Widget") == 0) {
+  wchar_t class_name[128]{};
+  GetWindowText(window, title, 128);
+  GetClassName(window, class_name, 128);
+  if (wcscmp(title, L"Elychron Desktop Widget") == 0 ||
+      wcscmp(class_name, L"ELYCHRON_NATIVE_DESKTOP_WIDGET") == 0) {
     ShowWindow(window, SW_HIDE);
   }
   return TRUE;
@@ -362,24 +366,17 @@ bool Win32Window::Create(const std::wstring& title,
     SetTimer(window, kDesktopWidgetVisibilityTimerId, 500, nullptr);
   }
 
-  const bool created = OnCreate();
-  if (created && !desktop_widget_mode_) {
-    NOTIFYICONDATA icon{};
-    icon.cbSize = sizeof(icon);
-    icon.hWnd = window_handle_;
-    icon.uID = kTrayIconId;
-    icon.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP;
-    icon.uCallbackMessage = kTrayCallbackMessage;
-    icon.hIcon =
-        LoadIcon(GetModuleHandle(nullptr), MAKEINTRESOURCE(IDI_APP_ICON));
-    wcscpy_s(icon.szTip, L"Elychron");
-    tray_icon_added_ = Shell_NotifyIcon(NIM_ADD, &icon) == TRUE;
-  }
-  return created;
+  // The lightweight native widget owns the notification-area icon. Keeping a
+  // second icon on the Flutter host would duplicate commands while the main
+  // window is open.
+  return OnCreate();
 }
 
 bool Win32Window::Show() {
-  if (start_hidden_ && !desktop_widget_mode_) return true;
+  if (start_hidden_ && !desktop_widget_mode_) {
+    EnterBackgroundMode();
+    return true;
+  }
   return ShowWindow(window_handle_,
                     desktop_widget_mode_ ? SW_SHOWNOACTIVATE : SW_SHOWNORMAL);
 }
@@ -440,17 +437,27 @@ Win32Window::MessageHandler(HWND hwnd,
       if (!desktop_widget_mode_ && !exit_requested_ &&
           ReadElychronBoolean(L"CloseToTray", true)) {
         start_hidden_ = true;
-        ShowWindow(hwnd, SW_HIDE);
+        EnterBackgroundMode();
         return 0;
       }
       if (!desktop_widget_mode_) StopDesktopWidgets();
       DestroyWindow(hwnd);
       return 0;
 
+    case kOpenMainWindowMessage:
+      if (!desktop_widget_mode_) {
+        start_hidden_ = false;
+        LeaveBackgroundMode();
+        ShowWindow(hwnd, SW_RESTORE);
+        SetForegroundWindow(hwnd);
+      }
+      return 0;
+
     case WM_COMMAND:
       switch (LOWORD(wparam)) {
         case kTrayOpenCommand:
           start_hidden_ = false;
+          LeaveBackgroundMode();
           ShowWindow(hwnd, SW_RESTORE);
           SetForegroundWindow(hwnd);
           return 0;
@@ -474,6 +481,7 @@ Win32Window::MessageHandler(HWND hwnd,
     case kTrayCallbackMessage:
       if (lparam == WM_LBUTTONUP || lparam == WM_LBUTTONDBLCLK) {
         start_hidden_ = false;
+        LeaveBackgroundMode();
         ShowWindow(hwnd, SW_RESTORE);
         SetForegroundWindow(hwnd);
         return 0;
@@ -614,9 +622,45 @@ void Win32Window::SetChildContent(HWND content) {
   MoveWindow(content, frame.left, frame.top, frame.right - frame.left,
              frame.bottom - frame.top, true);
 
-  if (!desktop_widget_mode_) {
+  if (!desktop_widget_mode_ && start_hidden_) {
+    EnterBackgroundMode();
+  } else if (!desktop_widget_mode_) {
     SetFocus(child_content_);
   }
+}
+
+void Win32Window::EnterBackgroundMode() {
+  if (desktop_widget_mode_ || window_handle_ == nullptr) return;
+
+  // Hide first so changing styles never exposes an input-blocking frame.
+  ShowWindow(window_handle_, SW_HIDE);
+  if (child_content_ != nullptr) {
+    ShowWindow(child_content_, SW_HIDE);
+    EnableWindow(child_content_, FALSE);
+  }
+  EnableWindow(window_handle_, FALSE);
+
+  LONG_PTR extended_style = GetWindowLongPtr(window_handle_, GWL_EXSTYLE);
+  extended_style |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT;
+  SetWindowLongPtr(window_handle_, GWL_EXSTYLE, extended_style);
+  SetWindowPos(window_handle_, HWND_BOTTOM, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW |
+                   SWP_FRAMECHANGED);
+}
+
+void Win32Window::LeaveBackgroundMode() {
+  if (desktop_widget_mode_ || window_handle_ == nullptr) return;
+
+  LONG_PTR extended_style = GetWindowLongPtr(window_handle_, GWL_EXSTYLE);
+  extended_style &= ~(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT);
+  SetWindowLongPtr(window_handle_, GWL_EXSTYLE, extended_style);
+  EnableWindow(window_handle_, TRUE);
+  if (child_content_ != nullptr) {
+    EnableWindow(child_content_, TRUE);
+    ShowWindow(child_content_, SW_SHOWNA);
+  }
+  SetWindowPos(window_handle_, HWND_TOP, 0, 0, 0, 0,
+               SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
 }
 
 RECT Win32Window::GetClientArea() {

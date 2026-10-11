@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "flutter_window.h"
+#include "native_desktop_widget.h"
 #include "utils.h"
 
 namespace {
@@ -33,21 +34,13 @@ int MonitorCount() {
   return std::max(1, static_cast<int>(monitors.size()));
 }
 
-bool ShouldShowWidgetAtStartup() {
-  constexpr wchar_t key_path[] = L"Software\\Elychron\\Windows";
-  DWORD value = 1;
-  DWORD size = sizeof(value);
-  if (RegGetValue(HKEY_CURRENT_USER, key_path, L"WidgetVisible",
-                  RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
-    return true;
-  }
-  return value != 0;
-}
-
 BOOL CALLBACK HideDesktopWidgetWindow(HWND window, LPARAM) {
   wchar_t title[128]{};
-  if (GetWindowText(window, title, 128) > 0 &&
-      wcscmp(title, L"Elychron Desktop Widget") == 0) {
+  wchar_t class_name[128]{};
+  GetWindowText(window, title, 128);
+  GetClassName(window, class_name, 128);
+  if (wcscmp(title, L"Elychron Desktop Widget") == 0 ||
+      wcscmp(class_name, L"ELYCHRON_NATIVE_DESKTOP_WIDGET") == 0) {
     ShowWindow(window, SW_HIDE);
   }
   return TRUE;
@@ -121,8 +114,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   // plugins.
   ::CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
 
-  flutter::DartProject project(L"data");
-
   std::vector<std::string> command_line_arguments =
       GetCommandLineArguments();
 
@@ -133,12 +124,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // Hide first in the requesting process. The widget's Flutter teardown can
     // be slow, but an already hidden HWND no longer covers desktop input.
     HideDesktopWidgetWindows();
-    HANDLE stop_event = OpenEvent(EVENT_MODIFY_STATE, FALSE,
-                                  L"Local\\ElychronDesktopWidgetStop");
-    if (stop_event != nullptr) {
-      SetEvent(stop_event);
-      CloseHandle(stop_event);
-    }
     ::CoUninitialize();
     return EXIT_SUCCESS;
   }
@@ -168,6 +153,12 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     if (!HasExplicitWidgetMonitor(command_line_arguments)) {
       LaunchAdditionalWidgetMonitors(MonitorCount());
     }
+    const int result =
+        RunNativeDesktopWidget(widget_monitor_index, widget_stop_event);
+    CloseHandle(widget_stop_event);
+    CloseHandle(widget_mutex);
+    ::CoUninitialize();
+    return result;
   }
 
   HANDLE main_mutex = nullptr;
@@ -176,8 +167,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     if (main_mutex == nullptr || GetLastError() == ERROR_ALREADY_EXISTS) {
       HWND existing = FindWindow(L"FLUTTER_RUNNER_WIN32_WINDOW", L"Elychron");
       if (existing != nullptr && !background) {
-        ShowWindow(existing, SW_RESTORE);
-        SetForegroundWindow(existing);
+        PostMessage(existing, WM_APP + 2, 0, 0);
       }
       if (main_mutex != nullptr) CloseHandle(main_mutex);
       ::CoUninitialize();
@@ -187,11 +177,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     // restoring the user's desktop widget choice at Windows logon. Dart will
     // publish a fresh snapshot later and its duplicate launch is rejected by
     // the per-monitor widget mutex.
-    if (background && ShouldShowWidgetAtStartup()) {
-      LaunchDesktopWidgetRoot();
-    }
+    LaunchDesktopWidgetRoot();
   }
 
+  flutter::DartProject project(L"data");
   project.set_dart_entrypoint_arguments(command_line_arguments);
 
   FlutterWindow window(project);

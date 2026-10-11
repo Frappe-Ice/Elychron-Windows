@@ -19,7 +19,6 @@ import 'package:celechron/page/home_page.dart';
 import 'package:celechron/page/option/ecard_pay_page.dart';
 import 'package:celechron/services/diagnostic_log_service.dart';
 import 'package:celechron/services/refresh_coordinator.dart';
-import 'package:celechron/services/pta_sync_service.dart';
 import 'package:celechron/worker/ecard_widget_messenger.dart';
 import 'package:celechron/database/database_helper.dart';
 import 'package:celechron/utils/global.dart';
@@ -112,10 +111,10 @@ void main(List<String> arguments) async {
     if (db.getWindowsWidgetVisible()) {
       unawaited(DesktopWidgetService.showWidget(remember: false));
     }
-    // PTA owns a persistent WebView2 profile and starts independently of the
-    // selected tab, so its cookies are restored and its task list can refresh
-    // even when the user does not open the PTA page in this session.
-    unawaited(PtaSyncService.instance.initialize());
+    // PTA's WebView2 controller is initialized lazily by PtaPage. Keeping a
+    // hidden WebView2 input surface alive for the whole app lifetime prevents
+    // desktop icon interaction on some Windows/Wallpaper Engine setups. Its
+    // persistent user-data directory still preserves the signed-in session.
   }
 
   var scholar = Get.find<Rx<Scholar>>(tag: 'scholar');

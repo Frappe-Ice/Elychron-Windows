@@ -101,6 +101,11 @@ class Win32Window {
   // Update the window frame's theme to match the system theme.
   static void UpdateTheme(HWND const window);
 
+  // Fully removes the Flutter host and its child surface from desktop input
+  // while the application is running only in the notification area.
+  void EnterBackgroundMode();
+  void LeaveBackgroundMode();
+
   bool quit_on_close_ = false;
   bool desktop_widget_mode_ = false;
   bool start_hidden_ = false;
