@@ -51,11 +51,169 @@ Widget modWindowsSection(
         _WindowsSyncStatusTile(),
         _WindowsAutoStartTile(),
         _WindowsWidgetVisibleTile(),
+        _WindowsWidgetAppearanceTile(),
         _WindowsCloseBehaviorTile(),
         _WindowsShortcutTile(),
       ],
     ),
   );
+}
+
+class _WindowsWidgetAppearanceTile extends StatelessWidget {
+  const _WindowsWidgetAppearanceTile();
+
+  @override
+  Widget build(BuildContext context) => CupertinoListTile(
+        title: const Text('挂件外观'),
+        subtitle: const Text('调整整体比例、字体大小和配色'),
+        trailing: const BackChervonRow(),
+        onTap: () => Navigator.of(context).push(
+          CupertinoPageRoute<void>(
+            builder: (_) => const _WindowsWidgetAppearancePage(),
+          ),
+        ),
+      );
+}
+
+class _WindowsWidgetAppearancePage extends StatefulWidget {
+  const _WindowsWidgetAppearancePage();
+
+  @override
+  State<_WindowsWidgetAppearancePage> createState() =>
+      _WindowsWidgetAppearancePageState();
+}
+
+class _WindowsWidgetAppearancePageState
+    extends State<_WindowsWidgetAppearancePage> {
+  static const _themeNames = ['清透灰', '樱花粉', '湖水蓝', '深色'];
+  double _cardScale = 100;
+  double _fontScale = 100;
+  int _theme = 0;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_load());
+  }
+
+  Future<void> _load() async {
+    final values = await Future.wait<int>([
+      WindowsStartupService.readWidgetCardScale(),
+      WindowsStartupService.readWidgetFontScale(),
+      WindowsStartupService.readWidgetTheme(),
+    ]);
+    if (!mounted) return;
+    setState(() {
+      _cardScale = values[0].clamp(80, 160).toDouble();
+      _fontScale = values[1].clamp(80, 160).toDouble();
+      _theme = values[2].clamp(0, 3);
+      _loading = false;
+    });
+  }
+
+  Future<void> _saveCardScale(double value) =>
+      WindowsStartupService.setWidgetCardScale(value.round());
+
+  Future<void> _saveFontScale(double value) =>
+      WindowsStartupService.setWidgetFontScale(value.round());
+
+  Future<void> _setTheme(int value) async {
+    setState(() => _theme = value);
+    await WindowsStartupService.setWidgetTheme(value);
+  }
+
+  Widget _sliderTile({
+    required String title,
+    required String subtitle,
+    required double value,
+    required ValueChanged<double> onChanged,
+    required ValueChanged<double> onChangeEnd,
+  }) {
+    return CupertinoListTile(
+      title: Row(
+        children: [
+          Expanded(child: Text(title)),
+          Text('${value.round()}%'),
+        ],
+      ),
+      subtitle: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(subtitle),
+          CupertinoSlider(
+            min: 80,
+            max: 160,
+            divisions: 8,
+            value: value,
+            onChanged: onChanged,
+            onChangeEnd: onChangeEnd,
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return CupertinoPageScaffold(
+      navigationBar: const CupertinoNavigationBar(middle: Text('挂件外观')),
+      child: SafeArea(
+        child: _loading
+            ? const Center(child: CupertinoActivityIndicator())
+            : ListView(
+                children: [
+                  CupertinoListSection.insetGrouped(
+                    header: const Text('大小'),
+                    children: [
+                      _sliderTile(
+                        title: '卡片比例',
+                        subtitle: '调整挂件宽度、卡片和间距，不改变文字',
+                        value: _cardScale,
+                        onChanged: (value) =>
+                            setState(() => _cardScale = value),
+                        onChangeEnd: (value) =>
+                            unawaited(_saveCardScale(value)),
+                      ),
+                      _sliderTile(
+                        title: '字体比例',
+                        subtitle: '只调整文字，自动保留足够的显示空间',
+                        value: _fontScale,
+                        onChanged: (value) =>
+                            setState(() => _fontScale = value),
+                        onChangeEnd: (value) =>
+                            unawaited(_saveFontScale(value)),
+                      ),
+                    ],
+                  ),
+                  CupertinoListSection.insetGrouped(
+                    header: const Text('颜色'),
+                    children: List.generate(
+                      _themeNames.length,
+                      (index) => CupertinoListTile(
+                        title: Text(_themeNames[index]),
+                        trailing: _theme == index
+                            ? const Icon(CupertinoIcons.check_mark)
+                            : null,
+                        onTap: () => unawaited(_setTheme(index)),
+                      ),
+                    ),
+                  ),
+                  const Padding(
+                    padding: EdgeInsets.fromLTRB(28, 0, 28, 24),
+                    child: Text(
+                      '修改后会在约半秒内应用到桌面挂件，并在下次启动时保留。',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: CupertinoColors.secondaryLabel,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+      ),
+    );
+  }
 }
 
 class _WindowsAutoStartTile extends StatefulWidget {
@@ -374,67 +532,78 @@ String _shortLocalTime(DateTime value) {
       '${two(value.hour)}:${two(value.minute)}';
 }
 
-/// 待办提醒方式 / 默认提前量 / 闹钟配色
-List<Widget> modReminderTiles(
+/// 待办与专注。单独成组，避免与教务设置混在一起。
+Widget modPlanningSection(
   BuildContext context,
-  OptionController optionController,
-) =>
-    [
-      CupertinoListTile(
-        title: const Text('待办提醒方式'),
-        subtitle: const Text('通知：横幅弹出+响铃；闹钟：全屏响铃，可延迟或划掉'),
-        trailing: Obx(() => CupertinoSlidingSegmentedControl<int>(
-              children: const {
-                0: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 10),
-                    child: Text('通知')),
-                1: Padding(
-                    padding: EdgeInsets.symmetric(horizontal: 10),
-                    child: Text('闹钟')),
-              },
-              groupValue: optionController.reminderMode.value,
-              onValueChanged: (value) {
-                if (value != null) {
-                  optionController.setReminderMode(value);
-                }
-              },
-            )),
-      ),
-      // ===== P1：默认提醒提前量 =====
-      // 活动锚「开始」、截止锚「截止」，各自再提前这么多；提醒型就是那一刻。
-      const _ReminderLeadTile(),
-      // ===== P3：专注参数 + 休息提醒 =====
-      const _FocusParamTile(),
-      const _FocusRestNotifyTile(),
-      // ===== P4：专注记录 / 统计 =====
-      CupertinoListTile(
-        title: const Text('专注记录'),
-        subtitle: const Text('今天 / 本周 / 本月时长、最近七天、按任务分布'),
-        trailing: const BackChervonRow(),
-        onTap: () async {
-          await Navigator.of(context, rootNavigator: true).push(
-            CupertinoPageRoute<void>(
-              builder: (BuildContext context) => const FocusStatsPage(),
-            ),
-          );
-        },
-      ),
-      CupertinoListTile(
-        title: const Text('闹钟可靠性'),
-        subtitle: const Text('全屏闹钟授权、锁屏弹出、电池白名单，一项项查'),
-        trailing: const BackChervonRow(),
-        onTap: () => showAlarmReliabilityDialog(context),
-      ),
-      CupertinoListTile(
-        title: const Text('闹钟配色'),
-        subtitle: const Text('浅色 + 毛玻璃，仅影响闹钟页'),
-        trailing: const BackChervonRow(),
-        onTap: () => showAlarmThemePicker(
-          context,
-          onChanged: () {},
+  OptionController optionController, {
+  required TextStyle? headerStyle,
+  required EdgeInsetsGeometry margin,
+}) =>
+    SliverToBoxAdapter(
+      child: CupertinoListSection.insetGrouped(
+        additionalDividerMargin: 2,
+        margin: margin,
+        header: Container(
+          padding: const EdgeInsets.only(left: 16),
+          child: Text('待办与专注', style: headerStyle),
         ),
+        children: <Widget>[
+          if (PlatformFeatures.isMobile)
+            CupertinoListTile(
+              title: const Text('待办提醒方式'),
+              subtitle: const Text('通知：横幅弹出+响铃；闹钟：全屏响铃，可延迟或划掉'),
+              trailing: Obx(() => CupertinoSlidingSegmentedControl<int>(
+                    children: const {
+                      0: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text('通知')),
+                      1: Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 10),
+                          child: Text('闹钟')),
+                    },
+                    groupValue: optionController.reminderMode.value,
+                    onValueChanged: (value) {
+                      if (value != null) {
+                        optionController.setReminderMode(value);
+                      }
+                    },
+                  )),
+            ),
+          const _ReminderLeadTile(),
+          const _FocusParamTile(),
+          if (PlatformFeatures.isMobile) const _FocusRestNotifyTile(),
+          CupertinoListTile(
+            title: const Text('专注记录'),
+            subtitle: const Text('今天 / 本周 / 本月时长、最近七天、按任务分布'),
+            trailing: const BackChervonRow(),
+            onTap: () async {
+              await Navigator.of(context, rootNavigator: true).push(
+                CupertinoPageRoute<void>(
+                  builder: (BuildContext context) => const FocusStatsPage(),
+                ),
+              );
+            },
+          ),
+          if (PlatformFeatures.isMobile)
+            CupertinoListTile(
+              title: const Text('闹钟可靠性'),
+              subtitle: const Text('全屏闹钟授权、锁屏弹出、电池白名单，一项项查'),
+              trailing: const BackChervonRow(),
+              onTap: () => showAlarmReliabilityDialog(context),
+            ),
+          if (PlatformFeatures.isMobile)
+            CupertinoListTile(
+              title: const Text('闹钟配色'),
+              subtitle: const Text('浅色 + 毛玻璃，仅影响闹钟页'),
+              trailing: const BackChervonRow(),
+              onTap: () => showAlarmThemePicker(
+                context,
+                onChanged: () {},
+              ),
+            ),
+        ],
       ),
-    ];
+    );
 
 /// 「默认提醒提前量」这一行：点开选一个值，存进 optionsBox。
 class _ReminderLeadTile extends StatefulWidget {

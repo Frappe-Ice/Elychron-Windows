@@ -76,7 +76,8 @@ class _DesktopAgendaWidgetState extends State<DesktopAgendaWidget> {
     final todoItems = items
         .where((item) =>
             item.kind == DesktopAgendaKind.deadline ||
-            item.kind == DesktopAgendaKind.reminder)
+            item.kind == DesktopAgendaKind.reminder ||
+            item.kind == DesktopAgendaKind.todo)
         .toList(growable: false);
     return CupertinoPageScaffold(
       backgroundColor: const Color(0x00000000),
@@ -142,9 +143,9 @@ class _DesktopAgendaWidgetState extends State<DesktopAgendaWidget> {
                     ),
                     const SizedBox(height: 7),
                     _AgendaSection(
-                      title: '近期作业与代办',
+                      title: '全部作业与代办',
                       emptyText:
-                          snapshot == null ? '等待 Elychron 同步' : '未来 7 天暂无作业或代办',
+                          snapshot == null ? '等待 Elychron 同步' : '暂无作业或代办',
                       items: todoItems,
                       now: now,
                     ),
@@ -204,7 +205,9 @@ class _AgendaRow extends StatelessWidget {
             SizedBox(
               width: 40,
               child: Text(
-                _timeLabel(item.startTime, now),
+                item.kind == DesktopAgendaKind.todo
+                    ? '待办'
+                    : _timeLabel(item.startTime, now),
                 style: TextStyle(
                   color: color,
                   fontSize: 11,
@@ -253,6 +256,7 @@ class _AgendaRow extends StatelessWidget {
         DesktopAgendaKind.event => const Color(0xFF7656B8),
         DesktopAgendaKind.deadline => const Color(0xFFD95783),
         DesktopAgendaKind.reminder => const Color(0xFF29977A),
+        DesktopAgendaKind.todo => const Color(0xFF65758B),
       };
 
   static String _timeLabel(DateTime time, DateTime now) {
@@ -270,6 +274,7 @@ class _AgendaRow extends StatelessWidget {
       DesktopAgendaKind.deadline =>
         item.id.startsWith('task:courses:') ? '学业作业' : '待办截止',
       DesktopAgendaKind.reminder => '提醒',
+      DesktopAgendaKind.todo => '待办',
     };
     return location.isEmpty ? category : '$category · $location';
   }

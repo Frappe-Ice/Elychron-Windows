@@ -42,16 +42,87 @@ struct State {
   HANDLE stop_event = nullptr;
   bool widget_visible = true;
   bool tray_added = false;
+  int scale_percent = 100;
+  int font_scale_percent = 100;
+  int theme = 0;
 };
 
-bool ReadWidgetVisible() {
-  DWORD value = 1;
+struct WidgetPreferences {
+  int scale_percent;
+  int font_scale_percent;
+  int theme;
+};
+
+struct Palette {
+  COLORREF text;
+  COLORREF secondary;
+  COLORREF heading;
+  COLORREF card;
+  COLORREF empty_card;
+  COLORREF course;
+  COLORREF exam;
+  COLORREF event;
+  COLORREF reminder;
+  COLORREF todo;
+  COLORREF urgent;
+  unsigned char opacity;
+};
+
+DWORD ReadPreference(const wchar_t* name, DWORD fallback) {
+  DWORD value = fallback;
   DWORD size = sizeof(value);
-  if (RegGetValue(HKEY_CURRENT_USER, kPreferencesKey, L"WidgetVisible",
+  if (RegGetValue(HKEY_CURRENT_USER, kPreferencesKey, name,
                   RRF_RT_REG_DWORD, nullptr, &value, &size) != ERROR_SUCCESS) {
-    return true;
+    return fallback;
   }
-  return value != 0;
+  return value;
+}
+
+WidgetPreferences LoadPreferences() {
+  return {
+      std::clamp(
+          static_cast<int>(ReadPreference(L"WidgetCardScalePercent", 100)),
+          80, 160),
+      std::clamp(
+          static_cast<int>(ReadPreference(L"WidgetFontScalePercent", 100)),
+          80, 160),
+      std::clamp(static_cast<int>(ReadPreference(L"WidgetTheme", 0)), 0, 3),
+  };
+}
+
+bool PreferencesMatch(const State* state, const WidgetPreferences& value) {
+  return state->scale_percent == value.scale_percent &&
+         state->font_scale_percent == value.font_scale_percent &&
+         state->theme == value.theme;
+}
+
+Palette PaletteFor(int theme) {
+  switch (theme) {
+    case 1:
+      return {RGB(91, 57, 72),   RGB(139, 91, 111), RGB(151, 66, 103),
+              RGB(255, 239, 246), RGB(249, 229, 238), RGB(204, 82, 132),
+              RGB(216, 126, 55), RGB(150, 92, 181), RGB(54, 151, 126),
+              RGB(223, 91, 142), RGB(204, 54, 83), 235};
+    case 2:
+      return {RGB(47, 69, 84),   RGB(78, 111, 132), RGB(43, 112, 151),
+              RGB(235, 247, 252), RGB(224, 241, 248), RGB(42, 132, 187),
+              RGB(205, 124, 48), RGB(98, 101, 183), RGB(36, 145, 129),
+              RGB(55, 142, 184), RGB(201, 55, 73), 235};
+    case 3:
+      return {RGB(239, 241, 245), RGB(183, 190, 201), RGB(247, 248, 251),
+              RGB(47, 52, 61), RGB(39, 44, 52), RGB(91, 174, 232),
+              RGB(235, 163, 76), RGB(169, 132, 224), RGB(73, 190, 155),
+              RGB(231, 116, 165), RGB(242, 93, 108), 225};
+    default:
+      return {RGB(62, 70, 82), RGB(98, 106, 118), RGB(86, 93, 105),
+              RGB(245, 246, 248), RGB(242, 243, 246), RGB(59, 130, 196),
+              RGB(209, 122, 33), RGB(118, 86, 184), RGB(41, 151, 122),
+              RGB(217, 87, 131), RGB(210, 55, 70), 235};
+  }
+}
+
+bool ReadWidgetVisible() {
+  return ReadPreference(L"WidgetVisible", 1) != 0;
 }
 
 void WriteWidgetVisible(bool visible) {
@@ -233,7 +304,7 @@ BOOL CALLBACK CollectMonitors(HMONITOR monitor, HDC, LPRECT, LPARAM data) {
   return TRUE;
 }
 
-RECT WidgetBounds(int requested_index) {
+RECT WidgetBounds(int requested_index, int scale_percent) {
   std::vector<MonitorEntry> monitors;
   EnumDisplayMonitors(nullptr, nullptr, CollectMonitors,
                       reinterpret_cast<LPARAM>(&monitors));
@@ -247,8 +318,12 @@ RECT WidgetBounds(int requested_index) {
   MONITORINFO info{sizeof(info)};
   GetMonitorInfo(selected.handle, &info);
   const UINT dpi = GetDpiForWindow(GetDesktopWindow());
-  const int margin = MulDiv(12, dpi, 96);
-  const int width = MulDiv(280, dpi, 96);
+  const int margin = MulDiv(MulDiv(12, scale_percent, 100), dpi, 96);
+  const int requested_width =
+      MulDiv(MulDiv(280, scale_percent, 100), dpi, 96);
+  const int work_width = info.rcWork.right - info.rcWork.left;
+  const int width = std::clamp(requested_width, 180,
+                               std::max(180, work_width - margin * 2));
   return RECT{info.rcWork.right - margin - width, info.rcWork.top + margin,
               info.rcWork.right - margin, info.rcWork.bottom - margin};
 }
@@ -288,68 +363,95 @@ bool IsSchedule(const Item& item) {
          item.kind == L"event";
 }
 
-COLORREF KindColor(const Item& item) {
-  if (item.urgent) return RGB(210, 55, 70);
-  if (item.kind == L"course") return RGB(59, 130, 196);
-  if (item.kind == L"exam") return RGB(209, 122, 33);
-  if (item.kind == L"event") return RGB(118, 86, 184);
-  if (item.kind == L"reminder") return RGB(41, 151, 122);
-  return RGB(217, 87, 131);
+COLORREF KindColor(const Item& item, const Palette& palette) {
+  if (item.urgent) return palette.urgent;
+  if (item.kind == L"course") return palette.course;
+  if (item.kind == L"exam") return palette.exam;
+  if (item.kind == L"event") return palette.event;
+  if (item.kind == L"reminder") return palette.reminder;
+  return palette.todo;
 }
 
 void DrawSection(HDC dc, int width, int* y, const wchar_t* title,
                  const std::vector<const Item*>& items, HFONT small_font,
-                 HFONT normal, HFONT semibold) {
-  RECT heading{11, *y, width - 11, *y + 18};
+                 HFONT normal, HFONT semibold, const Palette& palette,
+                 double font_scale, int max_count = 7) {
+  const int heading_height = static_cast<int>(18 * font_scale);
+  const int card_height = static_cast<int>(48 * font_scale);
+  const int card_gap = std::max(5, static_cast<int>(5 * font_scale));
+  const int title_height = static_cast<int>(22 * font_scale);
+  const int time_width = static_cast<int>(42 * std::max(1.0, font_scale));
+  RECT heading{11, *y, width - 11, *y + heading_height};
   Text(dc, std::wstring(title) + L"  " + std::to_wstring(items.size()),
-       heading, RGB(98, 106, 118), small_font, DT_LEFT | DT_SINGLELINE);
-  *y += 20;
-  const int count = std::min(7, static_cast<int>(items.size()));
+       heading, palette.secondary, small_font, DT_LEFT | DT_SINGLELINE);
+  *y += heading_height + 2;
+  const int count =
+      std::min(max_count, static_cast<int>(items.size()));
   if (count == 0) {
-    HBRUSH brush = CreateSolidBrush(RGB(242, 243, 246));
+    HBRUSH brush = CreateSolidBrush(palette.empty_card);
     HPEN pen = CreatePen(PS_NULL, 0, 0);
     SelectObject(dc, brush);
     SelectObject(dc, pen);
-    RoundRect(dc, 11, *y, width - 11, *y + 28, 10, 10);
-    RECT empty{19, *y + 5, width - 19, *y + 25};
-    Text(dc, L"暂无内容", empty, RGB(139, 139, 148), small_font);
+    const int empty_height = static_cast<int>(28 * font_scale);
+    RoundRect(dc, 11, *y, width - 11, *y + empty_height, 10, 10);
+    RECT empty{19, *y + 5, width - 19, *y + empty_height - 3};
+    Text(dc, L"暂无内容", empty, palette.secondary, small_font);
     DeleteObject(pen);
     DeleteObject(brush);
-    *y += 34;
+    *y += empty_height + 6;
     return;
   }
   for (int index = 0; index < count; ++index) {
     const Item& item = *items[index];
-    HBRUSH brush = CreateSolidBrush(RGB(245, 246, 248));
+    HBRUSH brush = CreateSolidBrush(palette.card);
     HPEN pen = CreatePen(PS_NULL, 0, 0);
     SelectObject(dc, brush);
     SelectObject(dc, pen);
-    RoundRect(dc, 11, *y, width - 11, *y + 48, 10, 10);
-    HBRUSH accent = CreateSolidBrush(KindColor(item));
-    RECT bar{11, *y + 3, 14, *y + 45};
+    RoundRect(dc, 11, *y, width - 11, *y + card_height, 10, 10);
+    const COLORREF kind_color = KindColor(item, palette);
+    HBRUSH accent = CreateSolidBrush(kind_color);
+    RECT bar{11, *y + 3, 14, *y + card_height - 3};
     FillRect(dc, &bar, accent);
     wchar_t time[16]{};
-    swprintf_s(time, L"%02u:%02u", item.time.wHour, item.time.wMinute);
-    RECT time_rect{20, *y + 8, 62, *y + 28};
-    Text(dc, time, time_rect, KindColor(item), semibold);
-    RECT title_rect{64, *y + 5, width - 19, *y + 27};
-    Text(dc, item.title, title_rect, RGB(62, 70, 82), normal);
-    std::wstring detail = item.location.empty() ? item.kind : item.location;
-    RECT detail_rect{64, *y + 26, width - 19, *y + 44};
-    Text(dc, detail, detail_rect, RGB(98, 106, 118), small_font);
+    if (item.kind == L"todo") {
+      wcscpy_s(time, L"待办");
+    } else {
+      swprintf_s(time, L"%02u:%02u", item.time.wHour, item.time.wMinute);
+    }
+    RECT time_rect{20, *y + 8, 20 + time_width, *y + title_height + 6};
+    Text(dc, time, time_rect, kind_color, semibold);
+    const int text_left = 22 + time_width;
+    RECT title_rect{text_left, *y + 5, width - 19,
+                    *y + 5 + title_height};
+    Text(dc, item.title, title_rect, palette.text, normal);
+    std::wstring detail = item.location.empty()
+                              ? (item.kind == L"todo" ? L"手动代办" : item.kind)
+                              : item.location;
+    RECT detail_rect{text_left, *y + 5 + title_height, width - 19,
+                     *y + card_height - 4};
+    Text(dc, detail, detail_rect, palette.secondary, small_font);
     DeleteObject(accent);
     DeleteObject(pen);
     DeleteObject(brush);
-    *y += 53;
+    *y += card_height + card_gap;
   }
   *y += 2;
 }
 
 void Render(HWND window, State* state) {
+  const WidgetPreferences preferences = LoadPreferences();
+  state->scale_percent = preferences.scale_percent;
+  state->font_scale_percent = preferences.font_scale_percent;
+  state->theme = preferences.theme;
+  const Palette palette = PaletteFor(preferences.theme);
   state->items = LoadItems();
-  const RECT bounds = WidgetBounds(state->monitor_index);
+  const RECT bounds =
+      WidgetBounds(state->monitor_index, preferences.scale_percent);
   const int width = bounds.right - bounds.left;
   const int height = bounds.bottom - bounds.top;
+  const double layout_scale = preferences.scale_percent / 100.0;
+  const int logical_width =
+      std::max(1, static_cast<int>(width / layout_scale));
   HDC screen = GetDC(nullptr);
   HDC memory = CreateCompatibleDC(screen);
   BITMAPINFO info{};
@@ -365,10 +467,23 @@ void Render(HWND window, State* state) {
   HGDIOBJ old_bitmap = SelectObject(memory, bitmap);
   memset(pixels, 0, static_cast<size_t>(width) * height * 4);
 
-  HFONT small_font = Font(12, FW_NORMAL);
-  HFONT normal = Font(14, FW_SEMIBOLD);
-  HFONT semibold = Font(12, FW_BOLD);
-  HFONT heading = Font(18, FW_SEMIBOLD);
+  SetGraphicsMode(memory, GM_ADVANCED);
+  XFORM transform{static_cast<FLOAT>(layout_scale), 0, 0,
+                  static_cast<FLOAT>(layout_scale), 0, 0};
+  SetWorldTransform(memory, &transform);
+
+  const double font_scale = preferences.font_scale_percent / 100.0;
+  // The world transform scales cards and spacing. Divide the logical font
+  // size by that transform so the font slider remains fully independent.
+  const double logical_font_scale = font_scale / layout_scale;
+  HFONT small_font = Font(
+      std::max(8, static_cast<int>(12 * logical_font_scale)), FW_NORMAL);
+  HFONT normal = Font(
+      std::max(9, static_cast<int>(14 * logical_font_scale)), FW_SEMIBOLD);
+  HFONT semibold = Font(
+      std::max(8, static_cast<int>(12 * logical_font_scale)), FW_BOLD);
+  HFONT heading = Font(
+      std::max(11, static_cast<int>(18 * logical_font_scale)), FW_SEMIBOLD);
   SYSTEMTIME today{};
   GetLocalTime(&today);
   const SYSTEMTIME tomorrow = Tomorrow(today);
@@ -377,10 +492,13 @@ void Render(HWND window, State* state) {
   wchar_t date[64]{};
   swprintf_s(date, L"%u月%u日 %s", today.wMonth, today.wDay,
              weekdays[today.wDayOfWeek]);
-  RECT date_rect{11, 8, width - 11, 28};
-  Text(memory, date, date_rect, RGB(101, 107, 118), small_font);
-  RECT heading_rect{11, 28, width - 11, 54};
-  Text(memory, L"今天与近期", heading_rect, RGB(86, 93, 105), heading);
+  const int date_height = static_cast<int>(20 * font_scale);
+  const int main_heading_height = static_cast<int>(26 * font_scale);
+  RECT date_rect{11, 8, logical_width - 11, 8 + date_height};
+  Text(memory, date, date_rect, palette.secondary, small_font);
+  RECT heading_rect{11, 8 + date_height, logical_width - 11,
+                    8 + date_height + main_heading_height};
+  Text(memory, L"今天与近期", heading_rect, palette.heading, heading);
 
   std::vector<const Item*> today_items;
   std::vector<const Item*> tomorrow_items;
@@ -390,19 +508,24 @@ void Render(HWND window, State* state) {
     else if (IsSchedule(item) && SameDay(item.time, tomorrow)) tomorrow_items.push_back(&item);
     else if (!IsSchedule(item)) todos.push_back(&item);
   }
-  int y = 60;
-  DrawSection(memory, width, &y, L"今日课程与日程", today_items, small_font,
-              normal, semibold);
-  DrawSection(memory, width, &y, L"明日课程与日程", tomorrow_items, small_font,
-              normal, semibold);
-  DrawSection(memory, width, &y, L"近期作业与代办", todos, small_font, normal,
-              semibold);
+  int y = 14 + date_height + main_heading_height;
+  DrawSection(memory, logical_width, &y, L"今日课程与日程", today_items,
+              small_font, normal, semibold, palette, font_scale);
+  DrawSection(memory, logical_width, &y, L"明日课程与日程", tomorrow_items,
+              small_font, normal, semibold, palette, font_scale);
+  const int todo_heading_height = static_cast<int>(20 * font_scale);
+  const int todo_row_height = std::max(1, static_cast<int>(53 * font_scale));
+  const int max_todo_count = std::max(
+      1, (static_cast<int>(height / layout_scale) - y - todo_heading_height - 8) /
+             todo_row_height);
+  DrawSection(memory, logical_width, &y, L"全部作业与代办", todos, small_font,
+              normal, semibold, palette, font_scale, max_todo_count);
 
   auto data = static_cast<unsigned char*>(pixels);
   for (size_t index = 0; index < static_cast<size_t>(width) * height; ++index) {
     unsigned char* pixel = data + index * 4;
     if (pixel[0] || pixel[1] || pixel[2]) {
-      const unsigned char alpha = 235;
+      const unsigned char alpha = palette.opacity;
       pixel[0] = static_cast<unsigned char>(pixel[0] * alpha / 255);
       pixel[1] = static_cast<unsigned char>(pixel[1] * alpha / 255);
       pixel[2] = static_cast<unsigned char>(pixel[2] * alpha / 255);
@@ -447,6 +570,9 @@ LRESULT CALLBACK WidgetProc(HWND window, UINT message, WPARAM wparam,
     case WM_TIMER:
       if (state != nullptr) {
         const bool should_show = ReadWidgetVisible();
+        const WidgetPreferences preferences = LoadPreferences();
+        const bool appearance_changed =
+            !PreferencesMatch(state, preferences);
         if (!should_show) {
           if (IsWindowVisible(window)) ShowWindow(window, SW_HIDE);
         } else if (!IsWindowVisible(window) || IsIconic(window)) {
@@ -456,7 +582,10 @@ LRESULT CALLBACK WidgetProc(HWND window, UINT message, WPARAM wparam,
                            SWP_SHOWWINDOW);
         }
         state->widget_visible = should_show;
-        if (should_show && ++state->timer_ticks >= 30) {
+        if (should_show && appearance_changed) {
+          state->timer_ticks = 0;
+          Render(window, state);
+        } else if (should_show && ++state->timer_ticks >= 30) {
           state->timer_ticks = 0;
           Render(window, state);
         }

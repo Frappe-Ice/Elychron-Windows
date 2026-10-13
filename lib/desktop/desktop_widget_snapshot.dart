@@ -22,7 +22,6 @@ class DesktopWidgetSnapshot {
     // upcoming horizon so assignments are never hidden just because they are
     // more than a day away.
     final scheduleEnd = dayStart.add(const Duration(days: 2));
-    final taskHorizon = dayStart.add(const Duration(days: 8));
     final items = <DesktopAgendaItem>[];
 
     for (final period in periods) {
@@ -47,11 +46,16 @@ class DesktopWidgetSnapshot {
 
     for (final task in tasks) {
       if (!_isVisibleTask(task)) continue;
-      final start = task.isEvent ? task.startTime : task.endTime;
-      final end = task.isEvent ? task.endTime : task.endTime;
-      final shouldInclude = task.isEvent
-          ? _overlapsDay(start, end, dayStart, scheduleEnd)
-          : _isRelevantUpcomingTask(task, dayStart, taskHorizon);
+      // A memo has no user-facing time. Its stored time is only a model
+      // placeholder, so use creation order for stable widget sorting.
+      final start = task.isMemo
+          ? task.sortableCreatedAt
+          : task.isEvent
+              ? task.startTime
+              : task.endTime;
+      final end = task.isMemo ? start : task.endTime;
+      final shouldInclude =
+          task.isEvent ? _overlapsDay(start, end, dayStart, scheduleEnd) : true;
       if (!shouldInclude) continue;
       items.add(DesktopAgendaItem(
         id: 'task:${task.uid}',
@@ -130,32 +134,20 @@ class DesktopWidgetSnapshot {
   }
 
   static bool _isVisibleTask(Task task) {
-    if (!task.showsInCalendar) return false;
     return task.status != TaskStatus.completed &&
         task.status != TaskStatus.deleted &&
         task.status != TaskStatus.outdated;
   }
 
-  static bool _isRelevantUpcomingTask(
-    Task task,
-    DateTime dayStart,
-    DateTime horizon,
-  ) {
-    if (task.isMemo) return false;
-    if (task.type == TaskType.deadline && task.endTime.isBefore(dayStart)) {
-      return true;
-    }
-    return !task.endTime.isBefore(dayStart) && task.endTime.isBefore(horizon);
-  }
-
   static DesktopAgendaKind _kindForTask(Task task) {
     if (task.isEvent) return DesktopAgendaKind.event;
     if (task.isRemind) return DesktopAgendaKind.reminder;
+    if (task.isMemo) return DesktopAgendaKind.todo;
     return DesktopAgendaKind.deadline;
   }
 }
 
-enum DesktopAgendaKind { course, exam, event, deadline, reminder }
+enum DesktopAgendaKind { course, exam, event, deadline, reminder, todo }
 
 class DesktopAgendaItem {
   const DesktopAgendaItem({

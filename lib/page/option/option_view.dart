@@ -70,7 +70,8 @@ class OptionPage extends StatelessWidget {
                     header: Container(
                         padding: const EdgeInsets.only(left: 16),
                         child: Text('教务', style: headerFooterTextStyle)),
-                    footer: (_optionController.pushOnGradeChange ||
+                    footer: PlatformFeatures.hasBackgroundRefresh &&
+                            (_optionController.pushOnGradeChange ||
                                 _optionController.pushOnDdlReminder) &&
                             _optionController.scholar.value.isLogan
                         ? Padding(
@@ -79,7 +80,6 @@ class OptionPage extends StatelessWidget {
                                 'Elychron 将不定期自动运行以刷新数据。请开启通知权限，且不要将 Elychron 从后台中移除。',
                                 style: headerFooterTextStyle))
                         : null,
-                    // ===== MOD: 改成 <Widget>，好让魔改的行（默认提前量）能混进来 =====
                     children: <Widget>[
                       if (_optionController.scholar.value.isLogan) ...{
                         CupertinoListTile(
@@ -172,30 +172,24 @@ class OptionPage extends StatelessWidget {
                                     _optionController.asyncRefresh = value;
                                   },
                                 ))),
-                        CupertinoListTile(
-                            title: const Text('推送成绩变动'),
-                            trailing: CupertinoSwitch(
-                              value: _optionController.pushOnGradeChange,
-                              onChanged: PlatformFeatures.hasBackgroundRefresh
-                                  ? (value) async {
-                                      _optionController.pushOnGradeChange =
-                                          value;
-                                    }
-                                  : null,
-                            )),
-                        CupertinoListTile(
-                            title: const Text('推送作业截止提醒'),
-                            trailing: CupertinoSwitch(
-                              value: _optionController.pushOnDdlReminder,
-                              onChanged: PlatformFeatures.hasBackgroundRefresh
-                                  ? (value) async {
-                                      _optionController.pushOnDdlReminder =
-                                          value;
-                                    }
-                                  : null,
-                            )),
-                        // ===== MOD: 提醒方式 / 闹钟配色 =====
-                        ...modReminderTiles(context, _optionController),
+                        if (PlatformFeatures.hasBackgroundRefresh) ...[
+                          CupertinoListTile(
+                              title: const Text('推送成绩变动'),
+                              trailing: CupertinoSwitch(
+                                value: _optionController.pushOnGradeChange,
+                                onChanged: (value) async {
+                                  _optionController.pushOnGradeChange = value;
+                                },
+                              )),
+                          CupertinoListTile(
+                              title: const Text('推送作业截止提醒'),
+                              trailing: CupertinoSwitch(
+                                value: _optionController.pushOnDdlReminder,
+                                onChanged: (value) async {
+                                  _optionController.pushOnDdlReminder = value;
+                                },
+                              )),
+                        ],
                       } else ...{
                         CupertinoListTile(
                           title: const Text('登录浙江大学统一身份认证',
@@ -230,28 +224,31 @@ class OptionPage extends StatelessWidget {
                     ],
                   ),
                 )),
-            // ===== MOD: AI 智能助手 =====
+            // Windows 桌面与后台
             modWindowsSection(context,
                 headerStyle: headerFooterTextStyle, margin: _defaultMargin),
-            modAiSection(context,
-                headerStyle: headerFooterTextStyle, margin: _defaultMargin),
-            // ===== MOD: 数据（导出 / 导入）=====
-            modDataSection(context,
+            modPlanningSection(context, _optionController,
                 headerStyle: headerFooterTextStyle, margin: _defaultMargin),
             // 日程
-            Obx(() => SliverToBoxAdapter(
-                    child: CupertinoListSection.insetGrouped(
-                        additionalDividerMargin: 2,
-                        margin: _defaultMargin,
-                        header: Container(
-                            padding: const EdgeInsets.only(left: 16),
-                            child: Text('日程', style: headerFooterTextStyle)),
-                        children: [
+            Obx(() {
+              // Windows 会隐藏系统日历开关，但 Obx 仍必须在每个
+              // 平台读取至少一个响应式值，否则 GetX 会持续报错并占用 UI 线程。
+              final calendarSyncEnabled = _optionController.calendarSyncEnabled;
+              final hasCalendarPermission =
+                  _optionController.hasCalendarPermission;
+              return SliverToBoxAdapter(
+                  child: CupertinoListSection.insetGrouped(
+                      additionalDividerMargin: 2,
+                      margin: _defaultMargin,
+                      header: Container(
+                          padding: const EdgeInsets.only(left: 16),
+                          child: Text('日程', style: headerFooterTextStyle)),
+                      children: [
+                    if (!PlatformFeatures.isWindows) ...[
                       CupertinoListTile(
                         title: const Text('同步到系统日历'),
                         trailing: CupertinoAsyncSwitch(
-                          value: _optionController.calendarSyncEnabled &&
-                              _optionController.hasCalendarPermission,
+                          value: calendarSyncEnabled && hasCalendarPermission,
                           onChanged: (value) async {
                             await _optionController.toggleCalendarSync(
                                 context, value);
@@ -262,8 +259,8 @@ class OptionPage extends StatelessWidget {
                         title: Text(
                           '课表同步选项',
                           style: TextStyle(
-                            color: _optionController.calendarSyncEnabled
-                                ? null // 使用默认颜色
+                            color: calendarSyncEnabled
+                                ? null
                                 : CupertinoDynamicColor.resolve(
                                     CupertinoColors.quaternaryLabel, context),
                           ),
@@ -275,28 +272,34 @@ class OptionPage extends StatelessWidget {
                                         CupertinoColors.secondaryLabel,
                                         context),
                                     fontSize: 16))),
-                        onTap: _optionController.calendarSyncEnabled
+                        onTap: calendarSyncEnabled
                             ? () {
                                 _optionController
                                     .showCalendarSyncDialog(context);
                               }
-                            : null, // 禁用点击
+                            : null,
                       ),
-                      CupertinoListTile(
-                        title: const Text('导出为iCal文件'),
-                        trailing: const BackChervonRow(),
-                        onTap: () =>
-                            _optionController.showExportDialog(context),
-                      ),
-                    ]))),
-            // 工具
+                    ],
+                    CupertinoListTile(
+                      title: const Text('导出为iCal文件'),
+                      trailing: const BackChervonRow(),
+                      onTap: () => _optionController.showExportDialog(context),
+                    ),
+                  ]));
+            }),
+            modAiSection(context,
+                headerStyle: headerFooterTextStyle, margin: _defaultMargin),
+            // ===== MOD: 数据（导出 / 导入）=====
+            modDataSection(context,
+                headerStyle: headerFooterTextStyle, margin: _defaultMargin),
+            // 外观
             SliverToBoxAdapter(
                 child: CupertinoListSection.insetGrouped(
                     additionalDividerMargin: 2,
                     margin: _defaultMargin,
                     header: Container(
                         padding: const EdgeInsets.only(left: 16),
-                        child: Text('工具', style: headerFooterTextStyle)),
+                        child: Text('外观', style: headerFooterTextStyle)),
                     children: <Widget>[
                   CupertinoListTile(
                     title: const Text('暗色模式'),
@@ -312,14 +315,6 @@ class OptionPage extends StatelessWidget {
                               style: trailingTextStyle,
                             ))),
                     onTap: () => _showBrightnessPicker(context),
-                  ),
-                  CupertinoListTile(
-                    title: const Text('付款码'),
-                    trailing: const BackChervonRow(),
-                    onTap: () async {
-                      Navigator.of(context, rootNavigator: true)
-                          .pushNamed('/ecardpaypage');
-                    },
                   ),
                 ])),
             // 关于

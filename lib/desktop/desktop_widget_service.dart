@@ -20,6 +20,9 @@ final class DesktopWidgetService {
   static const closeWidgetArgument = '--close-desktop-widget';
   static const _snapshotFileName = 'desktop-widget-v1.json';
   static Timer? _publishTimer;
+  static Worker? _taskChangeWorker;
+  static bool _publishing = false;
+  static bool _publishAgain = false;
 
   static Future<File> snapshotFile() async {
     final directory = await getApplicationSupportDirectory();
@@ -29,6 +32,12 @@ final class DesktopWidgetService {
   static Future<void> startPublishing() async {
     if (!Platform.isWindows || _publishTimer != null) return;
     await publishNow();
+    if (Get.isRegistered<RxList<Task>>(tag: 'taskList')) {
+      _taskChangeWorker ??= debounce<List<Task>>(
+          Get.find<RxList<Task>>(tag: 'taskList'),
+          (_) => unawaited(publishNow()),
+          time: const Duration(milliseconds: 250));
+    }
     _publishTimer = Timer.periodic(
       const Duration(seconds: 15),
       (_) => unawaited(publishNow()),
@@ -36,6 +45,22 @@ final class DesktopWidgetService {
   }
 
   static Future<void> publishNow() async {
+    if (_publishing) {
+      _publishAgain = true;
+      return;
+    }
+    _publishing = true;
+    try {
+      do {
+        _publishAgain = false;
+        await _writeSnapshot();
+      } while (_publishAgain);
+    } finally {
+      _publishing = false;
+    }
+  }
+
+  static Future<void> _writeSnapshot() async {
     if (!Get.isRegistered<Rx<Scholar>>(tag: 'scholar') ||
         !Get.isRegistered<RxList<Task>>(tag: 'taskList')) {
       return;

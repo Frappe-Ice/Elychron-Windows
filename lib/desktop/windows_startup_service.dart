@@ -8,6 +8,9 @@ final class WindowsStartupService {
   static const _preferencesKey = r'HKCU\Software\Elychron\Windows';
   static const _widgetVisibleValue = 'WidgetVisible';
   static const _closeToTrayValue = 'CloseToTray';
+  static const _widgetCardScaleValue = 'WidgetCardScalePercent';
+  static const _widgetFontScaleValue = 'WidgetFontScalePercent';
+  static const _widgetThemeValue = 'WidgetTheme';
 
   static String get widgetStartupCommand =>
       '"${Platform.resolvedExecutable}" --background';
@@ -53,6 +56,24 @@ final class WindowsStartupService {
 
   static Future<bool?> readCloseToTray() => _readBoolean(_closeToTrayValue);
 
+  static Future<int> readWidgetCardScale() =>
+      _readInteger(_widgetCardScaleValue, fallback: 100);
+
+  static Future<int> readWidgetFontScale() =>
+      _readInteger(_widgetFontScaleValue, fallback: 100);
+
+  static Future<int> readWidgetTheme() =>
+      _readInteger(_widgetThemeValue, fallback: 0);
+
+  static Future<void> setWidgetCardScale(int percent) =>
+      _writeInteger(_widgetCardScaleValue, percent.clamp(80, 160));
+
+  static Future<void> setWidgetFontScale(int percent) =>
+      _writeInteger(_widgetFontScaleValue, percent.clamp(80, 160));
+
+  static Future<void> setWidgetTheme(int theme) =>
+      _writeInteger(_widgetThemeValue, theme.clamp(0, 3));
+
   static Future<bool?> _readBoolean(String name) async {
     if (!Platform.isWindows) return null;
     final result = await Process.run(
@@ -87,6 +108,46 @@ final class WindowsStartupService {
     if (result.exitCode != 0) {
       throw WindowsIntegrationException(
         '无法保存 Windows 设置（退出码 ${result.exitCode}）',
+      );
+    }
+  }
+
+  static Future<int> _readInteger(
+    String name, {
+    required int fallback,
+  }) async {
+    if (!Platform.isWindows) return fallback;
+    final result = await Process.run(
+      'reg.exe',
+      ['query', _preferencesKey, '/v', name],
+      runInShell: false,
+    );
+    if (result.exitCode != 0) return fallback;
+    final match = RegExp(r'REG_DWORD\s+0x([0-9a-fA-F]+)')
+        .firstMatch(result.stdout.toString());
+    return match == null ? fallback : int.parse(match.group(1)!, radix: 16);
+  }
+
+  static Future<void> _writeInteger(String name, int value) async {
+    if (!Platform.isWindows) return;
+    final result = await Process.run(
+      'reg.exe',
+      [
+        'add',
+        _preferencesKey,
+        '/v',
+        name,
+        '/t',
+        'REG_DWORD',
+        '/d',
+        '$value',
+        '/f',
+      ],
+      runInShell: false,
+    );
+    if (result.exitCode != 0) {
+      throw WindowsIntegrationException(
+        '无法保存挂件外观设置（退出码 ${result.exitCode}）',
       );
     }
   }

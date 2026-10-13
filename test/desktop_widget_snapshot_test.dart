@@ -77,7 +77,7 @@ void main() {
     expect(snapshot.items.map((item) => item.id), ['period:tomorrow']);
   });
 
-  test('omits completed tasks and memos from the desktop agenda', () {
+  test('omits completed tasks but includes user-created memos', () {
     Task task(String id, TaskType type, TaskStatus status) => Task(
           uid: id,
           summary: id,
@@ -97,7 +97,9 @@ void main() {
       ],
     );
 
-    expect(snapshot.items, isEmpty);
+    expect(snapshot.items, hasLength(1));
+    expect(snapshot.items.single.id, 'task:memo');
+    expect(snapshot.items.single.kind, DesktopAgendaKind.todo);
   });
 
   test('includes upcoming deadlines so imported assignments reach the widget',
@@ -120,5 +122,25 @@ void main() {
 
     expect(snapshot.items.map((item) => item.id),
         contains('task:courses:assignment-1'));
+  });
+
+  test('includes incomplete deadlines even when they are more than a week away',
+      () {
+    final later = Task(
+      uid: 'manual-later',
+      summary: '远期自建代办',
+      type: TaskType.deadline,
+      startTime: DateTime(2026, 12, 1, 20),
+      endTime: DateTime(2026, 12, 1, 20),
+      repeatEndsTime: DateTime(2026, 12, 1),
+    );
+
+    final snapshot = DesktopWidgetSnapshot.forDay(
+      now: now,
+      periods: const [],
+      tasks: [later],
+    );
+
+    expect(snapshot.items.single.id, 'task:manual-later');
   });
 }
