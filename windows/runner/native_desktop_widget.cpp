@@ -2,6 +2,7 @@
 
 #include <shellapi.h>
 #include <shlobj.h>
+#include <flutter_windows.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -41,6 +42,7 @@ struct State {
   HWND tray = nullptr;
   HANDLE stop_event = nullptr;
   bool widget_visible = true;
+  bool monitor_available = true;
   bool tray_added = false;
   int scale_percent = 100;
   int font_scale_percent = 100;
@@ -313,15 +315,24 @@ RECT WidgetBounds(int requested_index, int scale_percent) {
                    [](const auto& left, const auto& right) {
                      return left.primary && !right.primary;
                    });
-  const auto& selected = monitors[std::clamp(
-      requested_index, 0, static_cast<int>(monitors.size()) - 1)];
+  if (requested_index < 0 ||
+      requested_index >= static_cast<int>(monitors.size())) {
+    return RECT{0, 0, 0, 0};
+  }
+  const auto& selected = monitors[requested_index];
   MONITORINFO info{sizeof(info)};
   GetMonitorInfo(selected.handle, &info);
-  const UINT dpi = GetDpiForWindow(GetDesktopWindow());
+  const UINT dpi = FlutterDesktopGetDpiForMonitor(selected.handle);
+  const int work_width = info.rcWork.right - info.rcWork.left;
+  const int logical_work_width = MulDiv(work_width, 96, std::max(96u, dpi));
+  // Keep the laptop/secondary-screen width that was tuned during development,
+  // then give wider desktop monitors more room without changing the user's
+  // global card scale. Mixed-DPI virtualization makes a 420px base on the
+  // large display match the already-tuned apparent width on the laptop panel.
+  const int base_width = logical_work_width >= 2400 ? 420 : 280;
   const int margin = MulDiv(MulDiv(12, scale_percent, 100), dpi, 96);
   const int requested_width =
-      MulDiv(MulDiv(280, scale_percent, 100), dpi, 96);
-  const int work_width = info.rcWork.right - info.rcWork.left;
+      MulDiv(MulDiv(base_width, scale_percent, 100), dpi, 96);
   const int width = std::clamp(requested_width, 180,
                                std::max(180, work_width - margin * 2));
   return RECT{info.rcWork.right - margin - width, info.rcWork.top + margin,
@@ -358,6 +369,23 @@ SYSTEMTIME Tomorrow(SYSTEMTIME today) {
   return today;
 }
 
+std::wstring TimeLabel(const Item& item) {
+  if (item.kind == L"todo") return L"待办";
+  SYSTEMTIME today{};
+  GetLocalTime(&today);
+  const SYSTEMTIME tomorrow = Tomorrow(today);
+  wchar_t value[32]{};
+  if (SameDay(item.time, today)) {
+    swprintf_s(value, L"今天 %02u:%02u", item.time.wHour, item.time.wMinute);
+  } else if (SameDay(item.time, tomorrow)) {
+    swprintf_s(value, L"明天 %02u:%02u", item.time.wHour, item.time.wMinute);
+  } else {
+    swprintf_s(value, L"%u/%u %02u:%02u", item.time.wMonth, item.time.wDay,
+               item.time.wHour, item.time.wMinute);
+  }
+  return value;
+}
+
 bool IsSchedule(const Item& item) {
   return item.kind == L"course" || item.kind == L"exam" ||
          item.kind == L"event";
@@ -380,7 +408,7 @@ void DrawSection(HDC dc, int width, int* y, const wchar_t* title,
   const int card_height = static_cast<int>(48 * font_scale);
   const int card_gap = std::max(5, static_cast<int>(5 * font_scale));
   const int title_height = static_cast<int>(22 * font_scale);
-  const int time_width = static_cast<int>(42 * std::max(1.0, font_scale));
+  const int time_width = static_cast<int>(78 * std::max(1.0, font_scale));
   RECT heading{11, *y, width - 11, *y + heading_height};
   Text(dc, std::wstring(title) + L"  " + std::to_wstring(items.size()),
        heading, palette.secondary, small_font, DT_LEFT | DT_SINGLELINE);
@@ -412,12 +440,7 @@ void DrawSection(HDC dc, int width, int* y, const wchar_t* title,
     HBRUSH accent = CreateSolidBrush(kind_color);
     RECT bar{11, *y + 3, 14, *y + card_height - 3};
     FillRect(dc, &bar, accent);
-    wchar_t time[16]{};
-    if (item.kind == L"todo") {
-      wcscpy_s(time, L"待办");
-    } else {
-      swprintf_s(time, L"%02u:%02u", item.time.wHour, item.time.wMinute);
-    }
+    const std::wstring time = TimeLabel(item);
     RECT time_rect{20, *y + 8, 20 + time_width, *y + title_height + 6};
     Text(dc, time, time_rect, kind_color, semibold);
     const int text_left = 22 + time_width;
@@ -449,6 +472,12 @@ void Render(HWND window, State* state) {
       WidgetBounds(state->monitor_index, preferences.scale_percent);
   const int width = bounds.right - bounds.left;
   const int height = bounds.bottom - bounds.top;
+  if (width <= 0 || height <= 0) {
+    state->monitor_available = false;
+    ShowWindow(window, SW_HIDE);
+    return;
+  }
+  state->monitor_available = true;
   const double layout_scale = preferences.scale_percent / 100.0;
   const int logical_width =
       std::max(1, static_cast<int>(width / layout_scale));
@@ -539,6 +568,9 @@ void Render(HWND window, State* state) {
   BLENDFUNCTION blend{AC_SRC_OVER, 0, 255, AC_SRC_ALPHA};
   UpdateLayeredWindow(window, screen, &destination, &size, memory, &source, 0,
                       &blend, ULW_ALPHA);
+  if (state->widget_visible && !IsWindowVisible(window)) {
+    ShowWindow(window, SW_SHOWNOACTIVATE);
+  }
 
   DeleteObject(heading);
   DeleteObject(semibold);
@@ -575,7 +607,8 @@ LRESULT CALLBACK WidgetProc(HWND window, UINT message, WPARAM wparam,
             !PreferencesMatch(state, preferences);
         if (!should_show) {
           if (IsWindowVisible(window)) ShowWindow(window, SW_HIDE);
-        } else if (!IsWindowVisible(window) || IsIconic(window)) {
+        } else if (state->monitor_available &&
+                   (!IsWindowVisible(window) || IsIconic(window))) {
           ShowWindow(window, SW_SHOWNOACTIVATE);
           SetWindowPos(window, HWND_TOP, 0, 0, 0, 0,
                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE |

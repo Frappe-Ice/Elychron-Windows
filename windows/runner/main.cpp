@@ -139,6 +139,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
   HANDLE widget_mutex = nullptr;
   HANDLE widget_stop_event = nullptr;
   if (desktop_widget) {
+    // Run discovery even when monitor 0 already exists. Dart may issue a
+    // second root launch shortly after startup; using it as a repair pass
+    // ensures a monitor that was briefly unavailable still gets its widget.
+    if (!HasExplicitWidgetMonitor(command_line_arguments)) {
+      LaunchAdditionalWidgetMonitors(MonitorCount());
+    }
+    if (widget_monitor_index >= MonitorCount()) {
+      ::CoUninitialize();
+      return EXIT_SUCCESS;
+    }
     const std::wstring mutex_name =
         L"Local\\ElychronDesktopWidgetInstance." +
         std::to_wstring(widget_monitor_index);
@@ -150,9 +160,6 @@ int APIENTRY wWinMain(_In_ HINSTANCE instance, _In_opt_ HINSTANCE prev,
     }
     widget_stop_event = CreateEvent(nullptr, TRUE, FALSE,
                                     L"Local\\ElychronDesktopWidgetStop");
-    if (!HasExplicitWidgetMonitor(command_line_arguments)) {
-      LaunchAdditionalWidgetMonitors(MonitorCount());
-    }
     const int result =
         RunNativeDesktopWidget(widget_monitor_index, widget_stop_event);
     CloseHandle(widget_stop_event);
