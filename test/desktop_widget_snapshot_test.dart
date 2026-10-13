@@ -143,4 +143,19 @@ void main() {
 
     expect(snapshot.items.single.id, 'task:manual-later');
   });
+
+  test('serializes UTC-backed deadlines as local wall-clock time', () {
+    final item = DesktopAgendaItem(
+      id: 'task:pta:utc',
+      title: 'Flag',
+      startTime: DateTime.utc(2026, 10, 13, 15, 59),
+      endTime: DateTime.utc(2026, 10, 13, 15, 59),
+      location: '',
+      kind: DesktopAgendaKind.deadline,
+    );
+
+    final json = item.toJson();
+    expect(json['startTime'], item.startTime.toLocal().toIso8601String());
+    expect((json['startTime'] as String).endsWith('Z'), isFalse);
+  });
 }

@@ -244,6 +244,14 @@ bool ParseTime(const std::wstring& value, SYSTEMTIME* time) {
   time->wDay = static_cast<WORD>(day);
   time->wHour = static_cast<WORD>(hour);
   time->wMinute = static_cast<WORD>(minute);
+  // Keep compatibility with snapshots written before local-time
+  // normalization. A trailing Z means the parsed wall-clock fields are UTC.
+  if (!value.empty() && (value.back() == L'Z' || value.back() == L'z')) {
+    SYSTEMTIME local{};
+    if (SystemTimeToTzSpecificLocalTime(nullptr, time, &local)) {
+      *time = local;
+    }
+  }
   return true;
 }
 
@@ -370,7 +378,13 @@ SYSTEMTIME Tomorrow(SYSTEMTIME today) {
 }
 
 std::wstring TimeLabel(const Item& item) {
-  if (item.kind == L"todo") return L"待办";
+  if (item.kind == L"todo") return L"无截止日期";
+  if (item.kind == L"deadline" || item.kind == L"reminder") {
+    wchar_t value[32]{};
+    swprintf_s(value, L"%u月%u日 %02u时%02u分", item.time.wMonth,
+               item.time.wDay, item.time.wHour, item.time.wMinute);
+    return value;
+  }
   SYSTEMTIME today{};
   GetLocalTime(&today);
   const SYSTEMTIME tomorrow = Tomorrow(today);
@@ -383,6 +397,36 @@ std::wstring TimeLabel(const Item& item) {
     swprintf_s(value, L"%u/%u %02u:%02u", item.time.wMonth, item.time.wDay,
                item.time.wHour, item.time.wMinute);
   }
+  return value;
+}
+
+std::wstring RemainingLabel(const Item& item) {
+  if (item.kind != L"deadline" && item.kind != L"reminder") return {};
+  SYSTEMTIME now{};
+  GetLocalTime(&now);
+  FILETIME now_file{};
+  FILETIME due_file{};
+  if (!SystemTimeToFileTime(&now, &now_file) ||
+      !SystemTimeToFileTime(&item.time, &due_file)) {
+    return {};
+  }
+  ULARGE_INTEGER now_value{now_file.dwLowDateTime, now_file.dwHighDateTime};
+  ULARGE_INTEGER due_value{due_file.dwLowDateTime, due_file.dwHighDateTime};
+  const bool overdue = due_value.QuadPart < now_value.QuadPart;
+  const unsigned long long ticks =
+      overdue ? now_value.QuadPart - due_value.QuadPart
+              : due_value.QuadPart - now_value.QuadPart;
+  constexpr unsigned long long kTicksPerMinute = 60ULL * 10000000ULL;
+  const unsigned long long total_minutes =
+      overdue ? ticks / kTicksPerMinute
+              : (ticks + kTicksPerMinute - 1) / kTicksPerMinute;
+  const unsigned long long days = total_minutes / (24 * 60);
+  const unsigned long long hours = (total_minutes / 60) % 24;
+  const unsigned long long minutes = total_minutes % 60;
+  wchar_t value[48]{};
+  swprintf_s(value, overdue ? L"已超时 %llu天%llu时%llu分"
+                            : L"还剩 %llu天%llu时%llu分",
+             days, hours, minutes);
   return value;
 }
 
@@ -408,7 +452,7 @@ void DrawSection(HDC dc, int width, int* y, const wchar_t* title,
   const int card_height = static_cast<int>(48 * font_scale);
   const int card_gap = std::max(5, static_cast<int>(5 * font_scale));
   const int title_height = static_cast<int>(22 * font_scale);
-  const int time_width = static_cast<int>(78 * std::max(1.0, font_scale));
+  const int time_width = static_cast<int>(124 * std::max(1.0, font_scale));
   RECT heading{11, *y, width - 11, *y + heading_height};
   Text(dc, std::wstring(title) + L"  " + std::to_wstring(items.size()),
        heading, palette.secondary, small_font, DT_LEFT | DT_SINGLELINE);
@@ -441,8 +485,14 @@ void DrawSection(HDC dc, int width, int* y, const wchar_t* title,
     RECT bar{11, *y + 3, 14, *y + card_height - 3};
     FillRect(dc, &bar, accent);
     const std::wstring time = TimeLabel(item);
-    RECT time_rect{20, *y + 8, 20 + time_width, *y + title_height + 6};
+    RECT time_rect{20, *y + 5, 20 + time_width, *y + 5 + title_height};
     Text(dc, time, time_rect, kind_color, semibold);
+    const std::wstring remaining = RemainingLabel(item);
+    if (!remaining.empty()) {
+      RECT remaining_rect{20, *y + 5 + title_height, 20 + time_width,
+                          *y + card_height - 4};
+      Text(dc, remaining, remaining_rect, palette.secondary, small_font);
+    }
     const int text_left = 22 + time_width;
     RECT title_rect{text_left, *y + 5, width - 19,
                     *y + 5 + title_height};

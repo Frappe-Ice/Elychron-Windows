@@ -186,8 +186,11 @@ class DesktopAgendaItem {
   Map<String, dynamic> toJson() => {
         'id': id,
         'title': title,
-        'startTime': startTime.toIso8601String(),
-        'endTime': endTime.toIso8601String(),
+        // Native Win32 rendering has no Dart timezone context. Persist local
+        // wall-clock values so UTC-backed PTA deadlines are not shown eight
+        // hours early on a China-timezone Windows installation.
+        'startTime': startTime.toLocal().toIso8601String(),
+        'endTime': endTime.toLocal().toIso8601String(),
         'location': location,
         'kind': kind.name,
         'urgent': urgent,
